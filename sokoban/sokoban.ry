@@ -1,0 +1,117 @@
+module sokoban
+  purpose: Play Sokoban at the host's screen, or without one: scripted input, frames as text.
+
+import game exposing State, Status
+import levels
+import std.console
+import std.environment
+import std.screen exposing Input
+import text_view
+import view
+
+public function expanded(script: List of Text) returns List of Input
+  purpose: One input per frame for moves such as R2 (right for two frames); F B L R S Q, W waits.
+  example: expanded(["R2", "S"]).length() is 3
+  example: expanded(["L3"]).at(2) is game.pressed(key: "L", elapsed_ms: game.frame_ms)
+  example: expanded(["W2"]).at(0) is game.pressed(key: "W", elapsed_ms: game.frame_ms)
+
+  let mutable frames: List of Input be []
+  for each move in script
+    let times be move.drop(1).to_integer() otherwise 1
+    change frames to frames.append_all(game.held(key: move.take(1).to_upper(), frames: times))
+  end
+  return frames
+end
+
+function demo_frames() returns List of Input
+  purpose: The demo: levels 1 and 2 played by their solutions, six steps of level 3, a push undone.
+
+  let pause be game.waits(20)
+  let opening be game.taps(levels.puzzle(0).solution).append_all(pause)
+  let second be game.taps(levels.puzzle(1).solution).append_all(pause)
+  let third be game.taps(levels.puzzle(2).solution.take(6))
+  let undo be game.held(key: "S", frames: 1).append_all(game.waits(1))
+  return opening.append_all(second).append_all(third).append_all(undo)
+end
+
+public function summary(state: State, frames: Integer) returns Text
+  purpose: The one-line account of a state: its level, the level's moves and pushes, the frames run.
+  example: summary(state: game.new_game(), frames: 0)
+    is "sokoban: level 1, moves 0, pushes 0, frames 0"
+
+  let counts be "moves {state.now.moves}, pushes {state.now.pushes}"
+  return "sokoban: level {state.level + 1}, {counts}, frames {frames}"
+end
+
+function show(state: State, frame_number: Integer) needs console
+  purpose: Print a frame as text under a line naming its number and the game's status.
+
+  console.print("frame {frame_number}: {state.status}")
+  console.print(text_view.text_view(view.render(state)))
+end
+
+public function played_out(frames: List of Input) returns State
+  purpose: The state of a new game after the frames in turn, as `demo` and `steps` play them.
+  example: played_out(expanded(["R2", "F1"])).now.moves is 2
+
+  return game.played(state: game.new_game(), frames: frames)
+end
+
+function play(frames: List of Input, every: Integer) needs console
+  purpose: Play the frames from the first level, printing every n-th frame, then the summary line.
+
+  let mutable state be game.new_game()
+  let mutable number be 0
+  for each controls in frames
+    if state.status is Quit then break end
+    change state to game.step(state: state, controls: controls)
+    change number to number + 1
+    if every is greater than 0 and number remainder every is 0 then
+      show(state: state, frame_number: number)
+    end
+  end
+  console.print(summary(state: state, frames: number))
+end
+
+function play_live() needs console, screen
+  purpose: Play at the host's screen from the title: each frame drawn, its input stepping the game.
+
+  let mutable state be game.title()
+  let mutable number be 0
+  repeat until state.status is Quit
+    let controls be screen.present(view.render(state))
+    change state to game.step(state: state, controls: controls)
+    change number to number + 1
+  end
+  console.print(summary(state: state, frames: number))
+end
+
+public function main() needs console, environment, screen
+  purpose: Run `play` (at the screen), `demo`, `steps R2 F1 ...`, or print the first frame as text.
+
+  let arguments be environment.arguments()
+  let mode be arguments.at(0) otherwise "start"
+  match mode
+    when "play" then play_live()
+    when "demo" then play(frames: demo_frames(), every: 10)
+    when "steps" then play(frames: expanded(arguments.drop(1)), every: 0)
+    otherwise console.print(text_view.text_view(view.render(game.new_game())))
+  end
+end
+
+test "the demo solves levels 1 and 2, then takes back the first push of level 3"
+  let final be played_out(demo_frames())
+  check final.status is Playing
+  check final.level is 2
+  check final.now.moves is 5
+  check final.now.pushes is 0
+  check final.history.length() is 5
+  check final.total_moves is 38
+end
+
+test "steps push the first crate onto its target, then step up"
+  let final be played_out(expanded(["R2", "F1"]))
+  check final.now.pushes is 1
+  check final.now.crates.contains(30) is true
+  check final.now.player is 21
+end

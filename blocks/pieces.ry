@@ -1,0 +1,163 @@
+module pieces
+  purpose: The seven tetrominoes: their cells in each rotation, their colours, letters and codes.
+
+import std.screen exposing Colour
+
+public type Kind is one of
+  purpose: The seven shapes of four cells, in the order the generator numbers them.
+  Bar
+  Square
+  Tee
+  Ess
+  Zed
+  Jay
+  Ell
+  can ToText
+end
+
+public type Cell
+  purpose: A cell of the well by column and row, row 0 at the top.
+  has column: Integer
+  has row: Integer
+  can ToText
+end
+
+public type Piece
+  purpose: A falling piece: its kind, its quarter turns clockwise and the top left of its box.
+  has kind: Kind
+  has turns: Integer
+  has column: Integer
+  has row: Integer
+  can ToText
+end
+
+public let all_kinds: List of Kind be [Bar, Square, Tee, Ess, Zed, Jay, Ell]
+  purpose: Every kind, numbered from 0 to 6 by its place.
+
+public function kind_at(index: Integer) returns Kind
+  purpose: The kind numbered from 0 to 6; a larger number wraps around.
+  example: kind_at(0) is Bar
+  example: kind_at(9) is Tee
+
+  return all_kinds.at(index remainder 7) otherwise Bar
+end
+
+public function code_of(kind: Kind) returns Integer
+  purpose: The code a kind leaves in the well, from 1 to 7; 0 is an empty cell.
+  example: code_of(Bar) is 1
+  example: code_of(Ell) is 7
+
+  return (all_kinds.index_of(kind) otherwise 0) + 1
+end
+
+public function letter_of(kind: Kind) returns Text
+  purpose: The letter a kind is known by, which the text frames draw it with.
+  example: letter_of(Bar) is "I"
+  example: letter_of(Zed) is "Z"
+
+  return "IOTSZJL".characters().at(code_of(kind) - 1) otherwise "?"
+end
+
+public function colour_of(kind: Kind) returns Colour
+  purpose: The colour of a kind's cells.
+  example: colour_of(Square) is Colour(red: 240, green: 220, blue: 0)
+
+  match kind
+    when Bar then return Colour(red: 0, green: 220, blue: 230)
+    when Square then return Colour(red: 240, green: 220, blue: 0)
+    when Tee then return Colour(red: 170, green: 60, blue: 230)
+    when Ess then return Colour(red: 40, green: 210, blue: 60)
+    when Zed then return Colour(red: 230, green: 40, blue: 40)
+    when Jay then return Colour(red: 40, green: 90, blue: 240)
+    when Ell then return Colour(red: 240, green: 150, blue: 20)
+  end
+end
+
+function outline(kind: Kind) returns Text
+  purpose: The unturned cells of a kind as column-row digit pairs within its box.
+
+  match kind
+    when Bar then return "01 11 21 31"
+    when Square then return "00 10 01 11"
+    when Tee then return "10 01 11 21"
+    when Ess then return "10 20 01 11"
+    when Zed then return "00 10 11 21"
+    when Jay then return "00 01 11 21"
+    when Ell then return "20 01 11 21"
+  end
+end
+
+function box_of(kind: Kind) returns Integer
+  purpose: The side of the square box a kind turns in: 4 for the bar, 2 for the square, else 3.
+
+  match kind
+    when Bar then return 4
+    when Square then return 2
+    otherwise return 3
+  end
+end
+
+function cell_of(pair: Text) returns Cell
+  purpose: The cell of a column-row digit pair such as "21".
+
+  let column be pair.take(1).to_integer() otherwise 0
+  let row be pair.drop(1).to_integer() otherwise 0
+  return Cell(column: column, row: row)
+end
+
+function turned(shape: List of Cell, size: Integer) returns List of Cell
+  purpose: The cells turned a quarter clockwise within a box of the given size.
+
+  return for each cell in shape collect Cell(column: size - 1 - cell.row, row: cell.column)
+end
+
+public function cells(kind: Kind, turns: Integer) returns List of Cell
+  purpose: The four cells of a kind within its box, turned clockwise by the quarter turns.
+  example: cells(kind: Tee, turns: 0)
+    is [
+      Cell(column: 1, row: 0),
+      Cell(column: 0, row: 1),
+      Cell(column: 1, row: 1),
+      Cell(column: 2, row: 1)
+    ]
+  example: cells(kind: Bar, turns: 1)
+    is [
+      Cell(column: 2, row: 0),
+      Cell(column: 2, row: 1),
+      Cell(column: 2, row: 2),
+      Cell(column: 2, row: 3)
+    ]
+  example: cells(kind: Jay, turns: 4) is cells(kind: Jay, turns: 0)
+
+  let mutable result be for each pair in outline(kind).split(" ") collect cell_of(pair)
+  let mutable done be 0
+  repeat until done is at least turns remainder 4
+    change result to turned(shape: result, size: box_of(kind))
+    change done to done + 1
+  end
+  return result
+end
+
+public function placed(piece: Piece) returns List of Cell
+  purpose: The four cells a piece covers in the well.
+  example: placed(Piece(kind: Square, turns: 0, column: 4, row: 2))
+    is [
+      Cell(column: 4, row: 2),
+      Cell(column: 5, row: 2),
+      Cell(column: 4, row: 3),
+      Cell(column: 5, row: 3)
+    ]
+
+  let shape be cells(kind: piece.kind, turns: piece.turns)
+  return for each cell in shape
+    collect Cell(column: piece.column + cell.column, row: piece.row + cell.row)
+end
+
+public function spawn(kind: Kind) returns Piece
+  purpose: A new piece of a kind at the top of the well, unturned, its box centred.
+  example: spawn(Square).column is 4
+  example: spawn(Tee).column is 3
+
+  let column be if kind is Square then 4 otherwise 3 end
+  return Piece(kind: kind, turns: 0, column: column, row: 0)
+end

@@ -1,0 +1,5 @@
+site/*/
+!site/assets/
+site/assets/*.wasm
+__pycache__/
+site_test/

@@ -1,0 +1,159 @@
+module view
+  purpose: A frame of the game as std.screen's shapes: the well in the middle, the tally beside it.
+
+import game exposing State, Status
+import pieces exposing Cell, Kind
+import std.screen exposing Colour, Shape
+import well
+
+public let cell_size: Integer be 9
+  purpose: The side of a cell of the well in pixels.
+
+public let well_left: Integer be 117
+  purpose: The pixel column of the well's left edge, the well centred on the screen.
+
+public let well_top: Integer be 9
+  purpose: The pixel row of the well's top edge.
+
+let panel_left: Integer be 225
+  purpose: The pixel column of the panel right of the well: the next piece and the tally.
+
+public let backdrop: Colour be Colour(red: 12, green: 12, blue: 28)
+  purpose: The colour behind everything.
+
+public let wall: Colour be Colour(red: 190, green: 190, blue: 190)
+  purpose: The colour of the well's sides and floor.
+
+public let floor_colour: Colour be Colour(red: 40, green: 40, blue: 40)
+  purpose: The colour of an empty cell of the well.
+
+public let ink: Colour be Colour(red: 255, green: 255, blue: 255)
+  purpose: The colour of the labels.
+
+public function cell_shape(left: Integer, top: Integer, cell: Cell, kind: Kind) returns Shape
+  purpose: The square of one cell of a kind, its box at the pixel position, a pixel of gap kept.
+  example: cell_shape(left: 0, top: 0, cell: Cell(column: 1, row: 2), kind: Square)
+    is Rectangle(screen_x: 9, screen_y: 18, width: 8, height: 8, colour: pieces.colour_of(Square))
+
+  return Rectangle(
+    screen_x: left + cell.column * cell_size,
+    screen_y: top + cell.row * cell_size,
+    width: cell_size - 1,
+    height: cell_size - 1,
+    colour: pieces.colour_of(kind)
+  )
+end
+
+function frame_of_well() returns List of Shape
+  purpose: The backdrop, the well's sides and floor, and its empty inside.
+
+  let depth be well.well_rows * cell_size
+  let width be well.well_columns * cell_size
+  let side be well_left - cell_size
+  return [
+    Rectangle(screen_x: 0, screen_y: 0, width: 320, height: 200, colour: backdrop),
+    Rectangle(screen_x: side, screen_y: well_top, width: cell_size, height: depth, colour: wall),
+    Rectangle(
+      screen_x: well_left + width,
+      screen_y: well_top,
+      width: cell_size,
+      height: depth,
+      colour: wall
+    ),
+    Rectangle(
+      screen_x: side,
+      screen_y: well_top + depth,
+      width: width + 2 * cell_size,
+      height: cell_size,
+      colour: wall
+    ),
+    Rectangle(
+      screen_x: well_left,
+      screen_y: well_top,
+      width: width,
+      height: depth,
+      colour: floor_colour
+    )
+  ]
+end
+
+function settled(board: List of Integer) returns List of Shape
+  purpose: The squares of every cell the pieces left in the well.
+
+  return for each code, place in board.with_index()
+    where code is not 0
+    collect cell_shape(
+      left: well_left,
+      top: well_top,
+      cell: Cell(column: place remainder well.well_columns, row: place.quotient(well.well_columns)),
+      kind: pieces.kind_at(code - 1)
+    )
+end
+
+function falling(state: State) returns List of Shape
+  purpose: The squares of the falling piece, none on the title screen.
+
+  if state.status is Title then return [] end
+  let left be well_left + state.piece.column * cell_size
+  let top be well_top + state.piece.row * cell_size
+  return for each cell in pieces.cells(kind: state.piece.kind, turns: state.piece.turns)
+    collect cell_shape(left: left, top: top, cell: cell, kind: state.piece.kind)
+end
+
+function label(column: Integer, row: Integer, text: Text) returns Shape
+  purpose: A label at a cell of the screen's grid of 9 pixel cells.
+
+  return Label(screen_x: column * cell_size, screen_y: row * cell_size, text: text, colour: ink)
+end
+
+function panel(state: State) returns List of Shape
+  purpose: The next piece and the score, lines and level right of the well; the keys left of it.
+
+  let next_cells be
+    for each cell in pieces.cells(kind: state.next, turns: 0)
+    collect cell_shape(left: panel_left, top: 3 * cell_size, cell: cell, kind: state.next)
+  let tally be [
+    label(column: 25, row: 1, text: "NEXT"),
+    label(column: 25, row: 7, text: "SCORE"),
+    label(column: 25, row: 8, text: "{state.score}"),
+    label(column: 25, row: 11, text: "LINES"),
+    label(column: 25, row: 12, text: "{state.lines}"),
+    label(column: 25, row: 15, text: "LEVEL"),
+    label(column: 25, row: 16, text: "{state.level}")
+  ]
+  let keys be [
+    label(column: 1, row: 1, text: "BLOCKS"),
+    label(column: 1, row: 4, text: "A D MOVE"),
+    label(column: 1, row: 5, text: "W TURN"),
+    label(column: 1, row: 6, text: "S DOWN"),
+    label(column: 1, row: 7, text: "F DROP"),
+    label(column: 1, row: 8, text: "Q QUIT")
+  ]
+  return next_cells.append_all(tally).append_all(keys)
+end
+
+function banner(status: Status) returns List of Shape
+  purpose: The words over the well on the title screen and after the end.
+
+  match status
+    when Title then
+      return [
+        label(column: 14, row: 8, text: "BLOCKS"),
+        label(column: 14, row: 10, text: "PRESS F")
+      ]
+    when Over then
+      return [
+        label(column: 14, row: 8, text: "GAME OVER"),
+        label(column: 14, row: 10, text: "PRESS F")
+      ]
+    otherwise return []
+  end
+end
+
+public function render(state: State) returns List of Shape
+  purpose: The frame of a state in drawing order: the well, its cells, the piece, panel and banner.
+  example: render(game.new_game(1)).length() is 26
+
+  let fixed be frame_of_well().append_all(settled(state.board))
+  return fixed.append_all(falling(state)).append_all(panel(state)).append_all(banner(state.status))
+end

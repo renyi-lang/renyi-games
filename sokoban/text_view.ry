@@ -1,0 +1,85 @@
+module text_view
+  purpose: A frame of rectangles and labels sampled into a grid of characters, for tests and demos.
+
+import std.screen exposing Colour, Shape
+import view exposing Kind
+
+public let columns: Integer be 53
+  purpose: The characters across a text frame: six pixels each, two to a cell of the board.
+
+public let rows: Integer be 16
+  purpose: The lines of a text frame: twelve pixels each, one to a cell of the board.
+
+public function covered(start: Integer, size: Integer, step: Integer, limit: Integer) returns Range
+  purpose: The grid cells whose middle lies on the pixels from start for size, within the limit.
+  example: covered(start: 0, size: 12, step: 6, limit: 53).to_list() is [0, 1]
+  example: covered(start: 9, size: 12, step: 6, limit: 53).to_list() is [1, 2]
+  example: covered(start: 30, size: 12, step: 12, limit: 16).to_list() is [2]
+  example: covered(start: 0, size: 200, step: 12, limit: 16).length() is 16
+
+  let middle be step.quotient(2)
+  let low be (start - middle + step - 1).at_least(0).quotient(step)
+  let high be (start + size - 1 - middle).quotient(step).at_most(limit - 1)
+  if start + size - 1 is less than middle then return from 1 to 0 end
+  return from low to high
+end
+
+public function text_view(frame: List of Shape) returns Text
+  purpose: The frame drawn as text, a character per six by twelve pixels; trailing spaces dropped.
+  example: text_view([]) is "\n".repeat(15)
+
+  let mutable grid be " ".repeat(columns * rows).characters()
+  for each shape in frame
+    change grid to drawn(grid: grid, shape: shape)
+  end
+  let lines be
+    for each row from 0 to rows - 1
+    collect grid.slice_text(start: row * columns, stop: row * columns + columns).trim_end()
+  return lines.join("\n")
+end
+
+function drawn(grid: List of Text, shape: Shape) returns List of Text
+  purpose: The grid with one shape drawn on it; shapes other than rectangles and labels are skipped.
+
+  match shape
+    when Rectangle(screen_x, screen_y, width, height, colour) then
+      let symbol be view.symbol_of(colour)
+      let mutable result be grid
+      for each row in covered(start: screen_y, size: height, step: 12, limit: rows)
+        for each column in covered(start: screen_x, size: width, step: 6, limit: columns)
+          change result to result.with_at(index: row * columns + column, item: symbol)
+        end
+      end
+      return result
+    when Label(screen_x, screen_y, text) then
+      return lettered(
+        grid: grid,
+        column: screen_x.quotient(6),
+        row: screen_y.quotient(12),
+        text: text
+      )
+    otherwise return grid
+  end
+end
+
+function lettered(grid: List of Text, column: Integer, row: Integer, text: Text)
+  returns List of Text
+  purpose: The grid with the text written from a cell to the right, clipped at the end of its row.
+
+  let mutable result be grid
+  if row is at least rows then return result end
+  for each letter, place in text.characters().with_index()
+    if column + place is at least columns then break end
+    change result to result.with_at(index: row * columns + column + place, item: letter)
+  end
+  return result
+end
+
+test "a crate cell is two characters of its symbol, under a label"
+  let crate be view.cell_shapes(kind: Crate, screen_x: 9, screen_y: 24)
+  let frame be crate.append(
+    Label(screen_x: 0, screen_y: 0, text: "LEVEL", colour: Colour(red: 1, green: 1, blue: 1))
+  )
+  check text_view(frame).lines().take(3) is ["LEVEL", "", " $$"]
+  check text_view(frame).split("\n").length() is rows
+end

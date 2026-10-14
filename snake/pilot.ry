@@ -1,0 +1,54 @@
+module pilot
+  purpose: The demo's driver: from the state alone, the key that heads for the food by a safe way.
+
+import board exposing Cell, Direction
+import game exposing State
+import keys
+import std.screen exposing Input
+
+public function preferences(head: Cell, food: Cell) returns List of Direction
+  purpose: The four directions, those toward the food first: across before down unless in line.
+  example: preferences(head: Cell(column: 5, row: 5), food: Cell(column: 9, row: 2))
+    is [Right, Up, Down, Left]
+  example: preferences(head: Cell(column: 5, row: 5), food: Cell(column: 5, row: 9))
+    is [Down, Right, Left, Up]
+
+  let across be if food.column is less than head.column then Left otherwise Right end
+  let down be if food.row is less than head.row then Up otherwise Down end
+  if food.column is head.column then
+    return [down, across, board.opposite(across), board.opposite(down)]
+  end
+  return [across, down, board.opposite(down), board.opposite(across)]
+end
+
+public function safe(state: State, way: Direction) returns Boolean
+  purpose: Whether the next move in a direction keeps the snake on the field and off itself.
+  example: safe(state: game.new_game(1), way: Up) is true
+  example: safe(state: game.new_game(1), way: Left) is false
+
+  if way is board.opposite(state.heading) then return false end
+  let head be state.body.first() otherwise return false
+  let target be board.moved(cell: head, heading: way)
+  return board.inside(target) and not state.body.without_last().contains(target)
+end
+
+public function pilot(state: State) returns Input
+  purpose: One scripted frame with the key of the first safe direction toward the food, or no key.
+  example: pilot(game.new_game(1)).turn_right is true
+
+  let head be state.body.first() otherwise return keys.idle(keys.frame_ms)
+  let choice be
+    for each way in preferences(head: head, food: state.food)
+    where safe(state: state, way: way)
+    first
+  let way be choice otherwise return keys.idle(keys.frame_ms)
+  return keys.holding(way)
+end
+
+test "the pilot eats the first food of seed 1"
+  let mutable state be game.new_game(1)
+  repeat until state.score is at least 1 or state.frames is at least 200
+    change state to game.step(state: state, controls: pilot(state))
+  end
+  check state.score is 1
+end

@@ -1,0 +1,120 @@
+module board
+  purpose: The field: its cells, the four directions, and the pseudo-random choice of a free cell.
+
+public let columns: Integer be 32
+  purpose: The field's width in cells.
+
+public let rows: Integer be 18
+  purpose: The field's height in cells, under a status line two cells high.
+
+public type Cell
+  purpose: One cell of the field by its column and row, counted from the top left.
+  has column: Integer
+  has row: Integer
+  can Hash
+  can ToText
+end
+
+public type Direction is one of
+  purpose: The way the snake's head moves on the field.
+  Up
+  Down
+  Left
+  Right
+  can ToText
+end
+
+public type Placement
+  purpose: Where new food lands, nothing on a full field, and the generator's seed after the draw.
+  has food: maybe Cell
+  has seed: Integer
+end
+
+public function moved(cell: Cell, heading: Direction) returns Cell
+  purpose: The neighbouring cell in a direction; it may lie outside the field.
+  example: moved(cell: Cell(column: 3, row: 3), heading: Up) is Cell(column: 3, row: 2)
+  example: moved(cell: Cell(column: 3, row: 3), heading: Left) is Cell(column: 2, row: 3)
+
+  match heading
+    when Up then return cell with row: cell.row - 1
+    when Down then return cell with row: cell.row + 1
+    when Left then return cell with column: cell.column - 1
+    when Right then return cell with column: cell.column + 1
+  end
+end
+
+public function opposite(heading: Direction) returns Direction
+  purpose: The direction that turns the head straight back.
+  example: opposite(Up) is Down
+  example: opposite(Right) is Left
+
+  match heading
+    when Up then return Down
+    when Down then return Up
+    when Left then return Right
+    when Right then return Left
+  end
+end
+
+public function inside(cell: Cell) returns Boolean
+  purpose: Whether a cell lies on the field rather than in the wall around it.
+  example: inside(Cell(column: 0, row: 0)) is true
+  example: inside(Cell(column: 32, row: 5)) is false
+  example: inside(Cell(column: 5, row: -1)) is false
+
+  let across be cell.column is at least 0 and cell.column is less than columns
+  return across and cell.row is at least 0 and cell.row is less than rows
+end
+
+public function next_seed(seed: Integer) returns Integer
+  purpose: The next value of a linear congruential generator (C's rand constants), mod 2 to the 31.
+  example: next_seed(1) is 1103527590
+  example: next_seed(0) is 12345
+
+  return (seed * 1103515245 + 12345) remainder 2147483648
+end
+
+public function free_cells(occupied: List of Cell) returns List of Cell
+  purpose: Every cell of the field not in the list, row by row from the top left.
+  example: free_cells([]).length() is 576
+  example: free_cells([Cell(column: 0, row: 0)]).first() is Cell(column: 1, row: 0)
+
+  let taken be occupied.to_set()
+  let mutable free: List of Cell be []
+  for each down from 0 to rows - 1
+    for each across from 0 to columns - 1
+      let cell be Cell(column: across, row: down)
+      if not taken.contains(cell) then change free to free.append(cell) end
+    end
+  end
+  return free
+end
+
+public function placed(occupied: List of Cell, seed: Integer) returns Placement
+  purpose: A free cell drawn by the generator: the next seed's high bits pick one of the free cells.
+  example: placed(occupied: [], seed: 1).seed is 1103527590
+  example: placed(occupied: [], seed: 1).food is Cell(column: 6, row: 4)
+
+  let drawn be next_seed(seed)
+  let free be free_cells(occupied)
+  if free.is_empty() then return Placement(food: nothing, seed: drawn) end
+  let index be drawn.quotient(65536) remainder free.length()
+  return Placement(food: free.at(index), seed: drawn)
+end
+
+test "food is never drawn on the snake: a field with one free cell gets its food there"
+  let all_cells be free_cells([])
+  let hole be Cell(column: 17, row: 11)
+  let occupied be for each cell in all_cells where cell is not hole collect cell
+  for each seed from 1 to 20
+    check placed(occupied: occupied, seed: seed).food is hole
+  end
+  check placed(occupied: all_cells, seed: 5).food is nothing
+end
+
+test "the same seed draws the same food, and the seed moves on"
+  let body be [Cell(column: 10, row: 9), Cell(column: 9, row: 9)]
+  let once be placed(occupied: body, seed: 42)
+  check placed(occupied: body, seed: 42) is once
+  check once.seed is next_seed(42)
+end

@@ -1,0 +1,118 @@
+module view
+  purpose: A state drawn as a frame of std.screen shapes: status line, field, food and snake.
+
+import board exposing Cell
+import game exposing State, Status
+import std.screen exposing Colour, Shape
+
+let cell_size: Integer be 10
+  purpose: The pixels of one cell of the field on each side.
+
+let field_top: Integer be 20
+  purpose: The first row of pixels of the field, under the status line.
+
+let night: Colour be Colour(red: 0, green: 0, blue: 0)
+  purpose: The colour behind the status line.
+
+let grass: Colour be Colour(red: 20, green: 40, blue: 20)
+  purpose: The colour of the empty field.
+
+let scales: Colour be Colour(red: 100, green: 240, blue: 100)
+  purpose: The colour of the snake's body.
+
+let crown: Colour be Colour(red: 230, green: 255, blue: 230)
+  purpose: The colour of the snake's head.
+
+let ashes: Colour be Colour(red: 120, green: 120, blue: 120)
+  purpose: The colour of a dead snake.
+
+let apple: Colour be Colour(red: 255, green: 140, blue: 0)
+  purpose: The colour of the food.
+
+let chalk: Colour be Colour(red: 255, green: 255, blue: 255)
+  purpose: The colour of the labels.
+
+public function cell_shape(cell: Cell, colour: Colour) returns Shape
+  purpose: The square of one cell, a pixel short on two sides so that neighbours stay apart.
+  example: cell_shape(cell: Cell(column: 2, row: 1), colour: Colour(red: 0, green: 0, blue: 0))
+    is Rectangle(
+      screen_x: 20,
+      screen_y: 30,
+      width: 9,
+      height: 9,
+      colour: Colour(red: 0, green: 0, blue: 0)
+    )
+
+  return Rectangle(
+    screen_x: cell.column * cell_size,
+    screen_y: field_top + cell.row * cell_size,
+    width: cell_size - 1,
+    height: cell_size - 1,
+    colour: colour
+  )
+end
+
+function segment_colour(status: Status, index: Integer) returns Colour
+  purpose: The colour of a segment of the snake: the head brighter, everything grey once dead.
+
+  if status is Dead then return ashes end
+  if index is 0 then return crown end
+  return scales
+end
+
+public function tally(state: State) returns List of Shape
+  purpose: The status line: the score, the snake's length and the best length so far.
+  example: tally(game.new_game(1)).length() is 3
+
+  return [
+    Label(screen_x: 0, screen_y: 6, text: "SCORE {state.score}", colour: chalk),
+    Label(screen_x: 110, screen_y: 6, text: "LENGTH {game.length_of(state)}", colour: chalk),
+    Label(screen_x: 240, screen_y: 6, text: "BEST {state.best}", colour: chalk)
+  ]
+end
+
+public function banner(status: Status) returns List of Shape
+  purpose: The words over the field: the title, the end of a game, or none during play.
+  example: banner(Playing) is []
+  example: banner(Title).length() is 2
+
+  let none: List of Shape be []
+  match status
+    when Title then return message(top: "S N A K E", bottom: "PRESS FIRE")
+    when Dead then return message(top: "GAME OVER", bottom: "FIRE TO PLAY AGAIN")
+    when Full then return message(top: "FIELD FULL", bottom: "FIRE TO PLAY AGAIN")
+    otherwise return none
+  end
+end
+
+function message(top: Text, bottom: Text) returns List of Shape
+  purpose: Two lines of text centred over the field, ten pixels to a letter.
+
+  return [
+    Label(screen_x: centred(top), screen_y: 60, text: top, colour: chalk),
+    Label(screen_x: centred(bottom), screen_y: 150, text: bottom, colour: chalk)
+  ]
+end
+
+function centred(text: Text) returns Integer
+  purpose: The left edge that centres a text of ten-pixel letters on the screen, on a cell's edge.
+
+  let cells be (screen.width() - text.length() * cell_size).quotient(2 * cell_size)
+  return cells.at_least(0) * cell_size
+end
+
+public function render(state: State) returns List of Shape
+  purpose: The frame of a state: the backdrop, the food, the snake head first, then the words.
+  example: render(game.new_game(1)).length() is 9
+
+  let backdrop be [
+    Rectangle(screen_x: 0, screen_y: 0, width: 320, height: 200, colour: night),
+    Rectangle(screen_x: 0, screen_y: field_top, width: 320, height: 180, colour: grass)
+  ]
+  let segments be
+    for each cell, index in state.body.with_index()
+    collect cell_shape(cell: cell, colour: segment_colour(status: state.status, index: index))
+  let food be cell_shape(cell: state.food, colour: apple)
+  let words be tally(state).append_all(banner(state.status))
+  return backdrop.append(food).append_all(segments).append_all(words)
+end

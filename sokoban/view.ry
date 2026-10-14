@@ -1,0 +1,251 @@
+module view
+  purpose: A state as the shapes of a frame on the 320 by 200 screen: board, counts and screens.
+
+import game exposing State, Status, Board, Position, Layout
+import levels
+import std.screen exposing Colour, Shape
+
+public type Kind is one of
+  purpose: What one cell of the board shows.
+  Outside
+  Wall
+  Floor
+  Target
+  Crate
+  Stored
+  Player
+  Standing
+  can ToText
+end
+
+public type Mark
+  purpose: A colour of the frame and the character that stands for it in a text frame.
+  has colour: Colour
+  has symbol: Text
+end
+
+public let cell_size: Integer be 12
+  purpose: The width and height of one cell of the board in pixels.
+
+let background: Colour be Colour(red: 16, green: 16, blue: 24)
+  purpose: The colour behind everything.
+
+let ink: Colour be Colour(red: 230, green: 230, blue: 230)
+  purpose: The colour of the labels.
+
+let gold: Colour be Colour(red: 255, green: 210, blue: 80)
+  purpose: The colour of a label that calls for attention.
+
+public let legend: List of Mark be [
+  Mark(colour: Colour(red: 96, green: 64, blue: 48), symbol: "#"),
+  Mark(colour: Colour(red: 150, green: 100, blue: 70), symbol: "#"),
+  Mark(colour: Colour(red: 44, green: 44, blue: 52), symbol: " "),
+  Mark(colour: Colour(red: 140, green: 40, blue: 40), symbol: "."),
+  Mark(colour: Colour(red: 70, green: 30, blue: 30), symbol: "."),
+  Mark(colour: Colour(red: 170, green: 110, blue: 20), symbol: "$"),
+  Mark(colour: Colour(red: 230, green: 160, blue: 50), symbol: "$"),
+  Mark(colour: Colour(red: 30, green: 120, blue: 50), symbol: "*"),
+  Mark(colour: Colour(red: 80, green: 200, blue: 100), symbol: "*"),
+  Mark(colour: Colour(red: 40, green: 80, blue: 170), symbol: "@"),
+  Mark(colour: Colour(red: 110, green: 170, blue: 250), symbol: "@"),
+  Mark(colour: Colour(red: 140, green: 40, blue: 41), symbol: "+"),
+  Mark(colour: Colour(red: 110, green: 170, blue: 251), symbol: "+")
+]
+  purpose: The colours of the cells, an edge and a face per kind, in the order of Kind from Wall.
+
+public function symbol_of(colour: Colour) returns Text
+  purpose: The character of a colour in a text frame: the legend's, else a space.
+  example: symbol_of(Colour(red: 230, green: 160, blue: 50)) is "$"
+  example: symbol_of(Colour(red: 1, green: 2, blue: 3)) is " "
+
+  let found be for each mark in legend where mark.colour is colour first
+  let mark be found otherwise return " "
+  return mark.symbol
+end
+
+public function kind_at(board: Board, now: Position, cell: Integer) returns Kind
+  purpose: What a cell shows: a wall, the floor outside or inside, a target, a crate or the player.
+  example: kind_at(board: sample.board, now: sample.start, cell: 0) is Wall
+  example: kind_at(board: sample.board, now: sample.start, cell: 6) is Player
+  example: kind_at(board: sample.board, now: sample.start, cell: 7) is Stored
+  example: kind_at(board: sample.board, now: sample.start, cell: 8) is Target
+
+  if board.walls.contains(cell) then return Wall end
+  if not board.inside.contains(cell) then return Outside end
+  let target be board.targets.contains(cell)
+  if now.player is cell then return if target then Standing otherwise Player end end
+  if now.crates.contains(cell) then return if target then Stored otherwise Crate end end
+  return if target then Target otherwise Floor end
+end
+
+let sample: Layout be game.layout_of(["#####", "#@*.#", "#####"])
+  purpose: A one-row level for the examples: the player, a crate on a target, an empty target.
+
+function paint(kind: Kind) returns List of Colour
+  purpose: The edge and face colours of a kind, from the legend; none for the floor outside.
+  example: paint(Outside) is []
+  example: paint(Crate).length() is 2
+
+  let offset be
+    match kind
+      when Outside then -1
+      when Wall then 0
+      when Floor then 2
+      when Target then 3
+      when Crate then 5
+      when Stored then 7
+      when Player then 9
+      when Standing then 11
+    end
+  if offset is -1 then return [] end
+  let first_mark be legend.at(offset) otherwise return []
+  if kind is Floor then return [first_mark.colour] end
+  let second_mark be legend.at(offset + 1) otherwise return []
+  return [first_mark.colour, second_mark.colour]
+end
+
+public function cell_shapes(kind: Kind, screen_x: Integer, screen_y: Integer) returns List of Shape
+  purpose: The rectangles of one cell at a place: a full square of its edge colour, an inset face.
+  example: cell_shapes(kind: Outside, screen_x: 0, screen_y: 0) is []
+  example: cell_shapes(kind: Floor, screen_x: 0, screen_y: 0).length() is 1
+  example: cell_shapes(kind: Crate, screen_x: 0, screen_y: 0).length() is 2
+
+  let mutable shapes: List of Shape be []
+  for each colour, layer in paint(kind).with_index()
+    let inset be layer * 2
+    let size be cell_size - inset * 2
+    let square be Rectangle(
+      screen_x: screen_x + inset,
+      screen_y: screen_y + inset,
+      width: size,
+      height: size,
+      colour: colour
+    )
+    change shapes to shapes.append(square)
+  end
+  return shapes
+end
+
+public function board_left(board: Board) returns Integer
+  purpose: The column of the board's left edge, the board centred across the screen.
+  example: board_left(sample.board) is 130
+
+  return (screen.width() - board.width * cell_size).quotient(2)
+end
+
+public function board_top(board: Board) returns Integer
+  purpose: The row of the board's top edge, the board centred between the top and bottom lines.
+  example: board_top(sample.board) is 82
+
+  return 16 + (168 - board.height * cell_size).quotient(2)
+end
+
+function board_shapes(board: Board, now: Position) returns List of Shape
+  purpose: The shapes of every cell of the board, row by row.
+
+  let left be board_left(board)
+  let top be board_top(board)
+  let mutable shapes: List of Shape be []
+  for each cell from 0 to board.width * board.height - 1
+    let screen_x be left + (cell remainder board.width) * cell_size
+    let screen_y be top + cell.quotient(board.width) * cell_size
+    let kind be kind_at(board: board, now: now, cell: cell)
+    change shapes to shapes.append_all(
+      cell_shapes(kind: kind, screen_x: screen_x, screen_y: screen_y)
+    )
+  end
+  return shapes
+end
+
+function centred(text: Text, screen_y: Integer, colour: Colour) returns Shape
+  purpose: A label centred across the screen, five pixels a character.
+  example: centred(text: "HI", screen_y: 9, colour: ink)
+    is Label(screen_x: 155, screen_y: 9, text: "HI", colour: ink)
+
+  let screen_x be (screen.width() - text.length() * 5).quotient(2)
+  return Label(screen_x: screen_x, screen_y: screen_y, text: text, colour: colour)
+end
+
+function backdrop() returns Shape
+  purpose: The rectangle that clears the screen.
+  example: backdrop()
+    is Rectangle(screen_x: 0, screen_y: 0, width: 320, height: 200, colour: background)
+
+  return Rectangle(
+    screen_x: 0,
+    screen_y: 0,
+    width: screen.width(),
+    height: screen.height(),
+    colour: background
+  )
+end
+
+function footer(state: State) returns Shape
+  purpose: The bottom line: the keys in play, or the news of a solved level.
+
+  match state.status
+    when Solved then
+      return centred(text: "SOLVED IN {state.now.moves} MOVES", screen_y: 188, colour: gold)
+    when Quit then return centred(text: "BYE", screen_y: 188, colour: gold)
+    otherwise
+      return centred(text: "WASD MOVE  F UNDO  HOLD F RESTART  Q QUIT", screen_y: 188, colour: ink)
+  end
+end
+
+function play_frame(state: State) returns List of Shape
+  purpose: The frame of a level in play: the board, the level, moves and pushes, the bottom line.
+
+  let level be Label(
+    screen_x: 8,
+    screen_y: 4,
+    text: "LEVEL {state.level + 1}/{levels.total()}",
+    colour: ink
+  )
+  let moves be Label(screen_x: 120, screen_y: 4, text: "MOVES {state.now.moves}", colour: ink)
+  let pushes be Label(screen_x: 232, screen_y: 4, text: "PUSHES {state.now.pushes}", colour: ink)
+  let labels be [level, moves, pushes, footer(state)]
+  return [backdrop()].append_all(board_shapes(board: state.board, now: state.now)).append_all(
+    labels
+  )
+end
+
+function title_frame() returns List of Shape
+  purpose: The title screen: the name, the goal, a row of the cells to learn them by, the keys.
+
+  let mutable shapes be [
+    backdrop(),
+    centred(text: "SOKOBAN", screen_y: 40, colour: gold),
+    centred(text: "PUSH EVERY CRATE ONTO A TARGET", screen_y: 70, colour: ink)
+  ]
+  for each kind, place in [Player, Crate, Target, Stored].with_index()
+    let cells be cell_shapes(kind: kind, screen_x: 130 + place * 16, screen_y: 96)
+    change shapes to shapes.append_all(cells)
+  end
+  let keys be centred(text: "WASD MOVE  F UNDO  HOLD F RESTART", screen_y: 130, colour: ink)
+  return shapes.append(keys).append(
+    centred(text: "PRESS FIRE TO START", screen_y: 150, colour: gold)
+  )
+end
+
+function end_frame(state: State) returns List of Shape
+  purpose: The screen after the last level: the total of moves and how to play again.
+
+  return [
+    backdrop(),
+    centred(text: "ALL {levels.total()} LEVELS SOLVED", screen_y: 70, colour: gold),
+    centred(text: "TOTAL MOVES {state.total_moves}", screen_y: 90, colour: ink),
+    centred(text: "PRESS FIRE TO PLAY AGAIN", screen_y: 120, colour: ink)
+  ]
+end
+
+public function render(state: State) returns List of Shape
+  purpose: The frame of a state: the title, a level in play or solved, or the end.
+  example: render(game.title()).length() is 13
+  example: render(game.new_game()).length() is 84
+
+  match state.status
+    when Title then return title_frame()
+    when Finished then return end_frame(state)
+    otherwise return play_frame(state)
+  end
+end

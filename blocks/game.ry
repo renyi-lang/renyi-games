@@ -1,0 +1,369 @@
+module game
+  purpose: The state of a game and one frame of its rules, a pure function of state and input.
+
+import pieces exposing Cell, Kind, Piece
+import std.screen exposing Input
+import well
+
+public type Status is one of
+  purpose: Where the game is: the title screen, play, over, or quit.
+  Title
+  Playing
+  Over
+  Quit
+  can ToText
+end
+
+public type State
+  purpose: Everything a frame needs: the well, the pieces, the generator, the tally and the timers.
+  has board: List of Integer
+  has piece: Piece
+  has next: Kind
+  has seed: Integer
+  has score: Integer
+  has lines: Integer
+  has level: Integer
+  has fall: Integer
+  has shift: Integer
+  has wait: Integer
+  has keys: Input
+  has status: Status
+  has frames: Integer
+end
+
+let repeat_delay: Integer be 150
+  purpose: The milliseconds left or right is held before the piece starts to slide on its own.
+
+let repeat_rate: Integer be 50
+  purpose: The milliseconds between two slides while left or right stays held after the delay.
+
+let line_points: List of Integer be [0, 100, 300, 500, 800]
+  purpose: The points for clearing 0 to 4 rows with one piece, before the level multiplies them.
+
+public function idle(elapsed_ms: Integer) returns Input
+  purpose: An input with no key held, lasting the given milliseconds.
+  example: idle(50).fire is false
+
+  return Input(
+    forward: false,
+    backward: false,
+    turn_left: false,
+    turn_right: false,
+    fire: false,
+    quit: false,
+    elapsed_ms: elapsed_ms
+  )
+end
+
+public function next_seed(seed: Integer) returns Integer
+  purpose: The generator's next state: a linear congruential step modulo 2 to the 31st.
+  example: next_seed(1) is 1103527590
+  example: next_seed(0) is 12345
+
+  return (seed * 1103515245 + 12345) remainder 2147483648
+end
+
+public function kind_of(seed: Integer) returns Kind
+  purpose: The kind a state of the generator draws, from its upper bits.
+  example: kind_of(1103527590) is pieces.kind_at(16838)
+
+  return pieces.kind_at(seed.quotient(65536) remainder 7)
+end
+
+public function fall_interval(level: Integer) returns Integer
+  purpose: The milliseconds a piece takes to fall one row at a level, 800 at level 1, at least 100.
+  example: fall_interval(1) is 800
+  example: fall_interval(3) is 660
+  example: fall_interval(20) is 100
+
+  return (800 - (level - 1) * 70).at_least(100)
+end
+
+public function new_game(seed: Integer) returns State
+  purpose: A game in play on an empty well, its first two pieces drawn from the seed.
+  example: new_game(1).status is Playing
+  example: new_game(1).piece.row is 0
+
+  let first_seed be next_seed(seed)
+  let second_seed be next_seed(first_seed)
+  return State(
+    board: well.empty(),
+    piece: pieces.spawn(kind_of(first_seed)),
+    next: kind_of(second_seed),
+    seed: second_seed,
+    score: 0,
+    lines: 0,
+    level: 1,
+    fall: 0,
+    shift: 0,
+    wait: 0,
+    keys: idle(0),
+    status: Playing,
+    frames: 0
+  )
+end
+
+public function title(seed: Integer) returns State
+  purpose: The title screen in front of a new game whose pieces the seed draws.
+  example: title(1).status is Title
+
+  return new_game(seed) with status: Title, seed: seed
+end
+
+public function step(state: State, controls: Input) returns State
+  purpose: One frame: the title and the end wait for a press of fire, play goes on, quit quits.
+
+  let elapsed be controls.elapsed_ms.at_least(0).at_most(100)
+  let before be state.keys
+  let next be state with keys: controls
+  if controls.quit then return next with status: Quit end
+  let fire be controls.fire and not before.fire
+  match state.status
+    when Playing then
+      let counted be next with frames: state.frames + 1
+      return playing(state: counted, controls: controls, before: before, elapsed: elapsed)
+    when Quit then return next
+    when Title then
+      if fire then return new_game(state.seed) with keys: controls end
+      return next
+    when Over then
+      if fire and state.wait is 0 then return new_game(state.seed) with keys: controls end
+      return next with wait: (state.wait - elapsed).at_least(0)
+  end
+end
+
+function playing(state: State, controls: Input, before: Input, elapsed: Integer) returns State
+  purpose: One frame of play: slide, turn, hard or soft drop, then the fall of the elapsed time.
+
+  let moved be slid(state: state, controls: controls, before: before, elapsed: elapsed)
+  let turned be if controls.forward and not before.forward then rotated(moved) otherwise moved end
+  if controls.fire and not before.fire then return hard_dropped(turned) end
+  let pushed be if controls.backward then descended(state: turned, points: 1) otherwise turned end
+  if pushed.status is not Playing then return pushed end
+  return fallen(state: pushed, elapsed: elapsed)
+end
+
+function direction_of(controls: Input) returns Integer
+  purpose: The way the keys push the piece: -1 left, 1 right, 0 for neither or both.
+
+  if controls.turn_left and not controls.turn_right then return -1 end
+  if controls.turn_right and not controls.turn_left then return 1 end
+  return 0
+end
+
+function slid(state: State, controls: Input, before: Input, elapsed: Integer) returns State
+  purpose: A slide left or right once per press, then by itself while held past the delay.
+
+  let direction be direction_of(controls)
+  if direction is 0 then return state with shift: 0 end
+  if direction is not direction_of(before) then
+    return nudged(state: (state with shift: 0), columns: direction)
+  end
+  let held be state.shift + elapsed
+  if held is less than repeat_delay then return state with shift: held end
+  return nudged(state: (state with shift: held - repeat_rate), columns: direction)
+end
+
+function fits(state: State, piece: Piece) returns Boolean
+  purpose: Whether a piece fits the well of a state.
+
+  return well.fits(board: state.board, cells: pieces.placed(piece))
+end
+
+function nudged(state: State, columns: Integer) returns State
+  purpose: The piece moved sideways by the columns if it fits there, else left where it is.
+
+  let moved be state.piece with column: state.piece.column + columns
+  if fits(state: state, piece: moved) then return state with piece: moved end
+  return state
+end
+
+function rotated(state: State) returns State
+  purpose: The piece turned a quarter clockwise where it fits, else one cell left, else one right.
+
+  let turned be state.piece with turns: (state.piece.turns + 1) remainder 4
+  for each offset in [0, -1, 1]
+    let kicked be turned with column: turned.column + offset
+    if fits(state: state, piece: kicked) then return state with piece: kicked end
+  end
+  return state
+end
+
+function descended(state: State, points: Integer) returns State
+  purpose: The piece one row lower, scoring the points, or locked where it lies when it cannot fall.
+
+  let lower be state.piece with row: state.piece.row + 1
+  if fits(state: state, piece: lower) then
+    return state with piece: lower, score: state.score + points
+  end
+  return locked(state)
+end
+
+function hard_dropped(state: State) returns State
+  purpose: The piece dropped as far as it falls and locked, two points per row it fell.
+
+  let mutable piece be state.piece
+  let mutable dropped be 0
+  repeat until not fits(state: state, piece: (piece with row: piece.row + 1))
+    change piece to piece with row: piece.row + 1
+    change dropped to dropped + 1
+  end
+  return locked(state with piece: piece, score: state.score + 2 * dropped)
+end
+
+function fallen(state: State, elapsed: Integer) returns State
+  purpose: The fall of the elapsed time: a row lower each time the level's interval has passed.
+
+  let fall be state.fall + elapsed
+  let interval be fall_interval(state.level)
+  if fall is less than interval then return state with fall: fall end
+  return descended(state: (state with fall: fall - interval), points: 0)
+end
+
+function locked(state: State) returns State
+  purpose: The piece set in the well, full rows cleared and scored, the next one in, or the end.
+
+  let code be pieces.code_of(state.piece.kind)
+  let board be well.filled(board: state.board, cells: pieces.placed(state.piece), code: code)
+  let clearing be well.cleared(board)
+  let lines be state.lines + clearing.rows_cleared
+  let points be (line_points.at(clearing.rows_cleared) otherwise 0) * state.level
+  let seed be next_seed(state.seed)
+  let drawn be state with piece: pieces.spawn(state.next), next: kind_of(seed), seed: seed, fall: 0
+  let tally be drawn with score: state.score + points, lines: lines, level: 1 + lines.quotient(10)
+  let after be tally with board: clearing.board
+  if fits(state: after, piece: after.piece) then return after end
+  return after with status: Over, wait: 1000
+end
+
+public function played(state: State, frames: List of Input) returns State
+  purpose: The state after every frame of input in turn; frames after the game ended are skipped.
+
+  let mutable current be state
+  for each controls in frames
+    if current.status is not Playing then break end
+    change current to step(state: current, controls: controls)
+  end
+  return current
+end
+
+public function summary(state: State) returns Text
+  purpose: One line on a state: its score, lines, level and frames played.
+  example: summary(new_game(1)) is "blocks: score 0, lines 0, level 1, frames 0"
+
+  let tally be "score {state.score}, lines {state.lines}, level {state.level}"
+  return "blocks: {tally}, frames {state.frames}"
+end
+
+function repeated(controls: Input, times: Integer) returns List of Input
+  purpose: The same input for the given number of frames.
+
+  let mutable frames: List of Input be []
+  repeat until frames.length() is at least times
+    change frames to frames.append(controls)
+  end
+  return frames
+end
+
+function walled(rows: Range, columns: Range) returns List of Integer
+  purpose: An otherwise empty well with every cell of the rows and columns holding a bar's code.
+
+  let mutable board be well.empty()
+  for each row in rows
+    for each column in columns
+      change board to well.filled(board: board, cells: [Cell(column: column, row: row)], code: 1)
+    end
+  end
+  return board
+end
+
+test "a key held slides the piece once, then again only after the repeat delay"
+  let left be idle(50) with turn_left: true
+  let start be new_game(1)
+  check start.piece.column is 3
+  check played(state: start, frames: repeated(controls: left, times: 3)).piece.column is 2
+  check played(state: start, frames: repeated(controls: left, times: 4)).piece.column is 1
+  let tapped be [left, idle(50), left, idle(50), left]
+  check played(state: start, frames: tapped).piece.column is 0
+end
+
+test "forward turns once per press, and a turn against the wall kicks one cell away"
+  let turn be idle(50) with forward: true
+  let start be new_game(1)
+  check played(state: start, frames: repeated(controls: turn, times: 3)).piece.turns is 1
+  check played(state: start, frames: [turn, idle(50), turn]).piece.turns is 2
+  let upright be start with piece: Piece(kind: Tee, turns: 1, column: -1, row: 5)
+  let kicked be step(state: upright, controls: turn)
+  check kicked.piece.turns is 2
+  check kicked.piece.column is 0
+end
+
+test "a piece falls a row per interval, and a soft drop a row per frame for a point each"
+  let start be new_game(1)
+  check played(state: start, frames: repeated(controls: idle(50), times: 15)).piece.row is 0
+  check played(state: start, frames: repeated(controls: idle(50), times: 16)).piece.row is 1
+  let pushed be played(
+    state: start,
+    frames: repeated(controls: (idle(50) with backward: true), times: 3)
+  )
+  check pushed.piece.row is 3
+  check pushed.score is 3
+end
+
+test "a hard drop locks the piece on the floor for two points a row, and the next piece comes in"
+  let start be new_game(1)
+  let dropped be step(state: start, controls: idle(50) with fire: true)
+  check dropped.score is 36
+  check dropped.piece.kind is start.next
+  check dropped.piece.row is 0
+  check for each code in dropped.board
+  where code is not 0
+  count is 4
+  check dropped.next is kind_of(dropped.seed)
+end
+
+test "a full row clears and scores by the level, and the tenth line raises the level"
+  let board be walled(rows: from 19 to 19, columns: from 0 to 2)
+  let gapped be well.filled(
+    board: board,
+    cells: [Cell(column: 7, row: 19), Cell(column: 8, row: 19), Cell(column: 9, row: 19)],
+    code: 2
+  )
+  let bar be Piece(kind: Bar, turns: 0, column: 3, row: 0)
+  let ready be new_game(1) with board: gapped, piece: bar, lines: 9, level: 2
+  let cleared be step(state: ready, controls: idle(50) with fire: true)
+  check cleared.lines is 10
+  check cleared.level is 2
+  check cleared.score is 36 + 200
+  check cleared.board is well.empty()
+  let higher be step(state: (ready with lines: 9, level: 1), controls: idle(50) with fire: true)
+  check higher.level is 2
+  check higher.score is 36 + 100
+end
+
+test "a new piece that cannot be placed ends the game; fire after the wait starts another"
+  let blocked be new_game(1) with board: walled(rows: from 2 to 19, columns: from 0 to 8)
+  let over be step(state: blocked, controls: idle(50) with fire: true)
+  check over.status is Over
+  check step(state: over, controls: idle(50) with fire: true).status is Over
+  let waited be step(state: over, controls: idle(50))
+  check waited.status is Over
+  let later be over with wait: 0, keys: idle(50)
+  let again be step(state: later, controls: idle(50) with fire: true)
+  check again.status is Playing
+  check again.score is 0
+  check again.board is well.empty()
+end
+
+test "the title waits for fire, quit ends the program, and a seed replays the same game"
+  let waiting be title(1)
+  check step(state: waiting, controls: idle(50)).status is Title
+  let started be step(state: waiting, controls: idle(50) with fire: true)
+  check started.status is Playing
+  check started.piece is new_game(1).piece
+  check step(state: started, controls: idle(50) with fire: true).piece is started.piece
+  check step(state: started, controls: idle(50) with quit: true).status is Quit
+  let script be repeated(controls: (idle(50) with fire: true), times: 1).append(idle(50))
+  check played(state: new_game(5), frames: script) is played(state: new_game(5), frames: script)
+  check new_game(5).piece is not new_game(1).piece or new_game(5).next is not new_game(1).next
+end

@@ -1,0 +1,247 @@
+module game
+  purpose: The state of a game of snake and one frame of it, a pure function of state and input.
+
+import board exposing Cell, Direction
+import keys
+import std.screen exposing Input
+
+public type Status is one of
+  purpose: Where the game is: the title screen, play, a death, a field filled, or quit.
+  Title
+  Playing
+  Dead
+  Full
+  Quit
+  can ToText
+end
+
+public type State
+  purpose: A frame's state: the snake head first, its heading, the food, the generator, the tallies.
+  has body: List of Cell
+  has heading: Direction
+  has wanted: Direction
+  has food: Cell
+  has seed: Integer
+  has score: Integer
+  has best: Integer
+  has timer: Integer
+  has frames: Integer
+  has trigger: Boolean
+  has status: Status
+end
+
+let start_body: List of Cell be [
+  Cell(column: 10, row: 9),
+  Cell(column: 9, row: 9),
+  Cell(column: 8, row: 9)
+]
+  purpose: The snake at the start: three cells in the middle row, the head to the east.
+
+public function new_game(seed: Integer) returns State
+  purpose: A game in play: a snake of three cells heading east, its first food drawn from the seed.
+  example: new_game(1).body.length() is 3
+  example: new_game(1).status is Playing
+  example: new_game(1).food is Cell(column: 29, row: 6)
+
+  let placement be board.placed(occupied: start_body, seed: seed)
+  return State(
+    body: start_body,
+    heading: Right,
+    wanted: Right,
+    food: placement.food otherwise Cell(column: 0, row: 0),
+    seed: placement.seed,
+    score: 0,
+    best: start_body.length(),
+    timer: 0,
+    frames: 0,
+    trigger: false,
+    status: Playing
+  )
+end
+
+public function title(seed: Integer) returns State
+  purpose: The title screen in front of a new game drawn from the seed.
+  example: title(1).status is Title
+
+  return new_game(seed) with status: Title
+end
+
+public function interval(score: Integer) returns Integer
+  purpose: The milliseconds between two moves: 150 at first, 5 fewer a point, never under 60.
+  example: interval(0) is 150
+  example: interval(4) is 130
+  example: interval(40) is 60
+
+  return (150 - score * 5).at_least(60)
+end
+
+public function length_of(state: State) returns Integer
+  purpose: How many cells the snake covers.
+  example: length_of(new_game(1)) is 3
+
+  return state.body.length()
+end
+
+public function step(state: State, controls: Input) returns State
+  purpose: One frame: the title waits for fire, play goes on, an ended game waits for fire again.
+
+  let fresh be controls.fire and not state.trigger
+  let timed be state with trigger: controls.fire, frames: state.frames + 1
+  if controls.quit then return timed with status: Quit end
+  match state.status
+    when Title then
+      if fresh then return timed with status: Playing end
+      return timed
+    when Playing then return playing(state: timed, controls: controls)
+    when Quit then return timed
+    otherwise
+      if fresh then return restarted(timed) end
+      return timed
+  end
+end
+
+function restarted(state: State) returns State
+  purpose: A new game in play after an ended one: the generator goes on and the best length is kept.
+
+  let fresh be new_game(state.seed)
+  return fresh with best: state.best, trigger: state.trigger, frames: state.frames
+end
+
+function playing(state: State, controls: Input) returns State
+  purpose: One frame of play: a key turns the next move; the snake moves when its interval is up.
+
+  let wanted be steered(heading: state.heading, wanted: state.wanted, controls: controls)
+  let timer be state.timer + controls.elapsed_ms.at_least(0).at_most(200)
+  let pace be interval(state.score)
+  let ready be state with wanted: wanted, timer: timer
+  if timer is less than pace then return ready end
+  return advanced(ready with timer: (timer - pace).at_most(pace - 1))
+end
+
+public function steered(heading: Direction, wanted: Direction, controls: Input) returns Direction
+  purpose: The way of the next move: the key held, unless it turns the head straight back.
+  example: steered(heading: Right, wanted: Right, controls: keys.holding(Up)) is Up
+  example: steered(heading: Right, wanted: Up, controls: keys.holding(Left)) is Up
+  example: steered(heading: Right, wanted: Down, controls: keys.idle(50)) is Down
+
+  let key be pressed(controls) otherwise return wanted
+  if key is board.opposite(heading) then return wanted end
+  return key
+end
+
+function pressed(controls: Input) returns maybe Direction
+  purpose: The direction of the key held, the first of forward, backward, left and right.
+
+  if controls.forward then return Up end
+  if controls.backward then return Down end
+  if controls.turn_left then return Left end
+  if controls.turn_right then return Right end
+  return nothing
+end
+
+function advanced(state: State) returns State
+  purpose: The snake one cell further: it eats the food and grows, or dies on a wall or on itself.
+
+  let head be state.body.first() otherwise return state
+  let target be board.moved(cell: head, heading: state.wanted)
+  let eating be target is state.food
+  let kept be if eating then state.body otherwise state.body.without_last() end
+  let turned be state with heading: state.wanted
+  if not board.inside(target) or kept.contains(target) then return turned with status: Dead end
+  let grown be turned with body: [target].append_all(kept)
+  if eating then return fed(grown) end
+  return grown
+end
+
+function fed(state: State) returns State
+  purpose: The state after a meal: a point more, the best length raised, new food on a free cell.
+
+  let placement be board.placed(occupied: state.body, seed: state.seed)
+  let best be state.best.at_least(state.body.length())
+  let scored be state with score: state.score + 1, best: best, seed: placement.seed
+  let food be placement.food otherwise return scored with status: Full
+  return scored with food: food
+end
+
+public function played(state: State, frames: List of Input) returns State
+  purpose: The state after every frame of input in turn; a game that ended stays as it is.
+
+  let mutable current be state
+  for each controls in frames
+    if current.status is not Playing then break end
+    change current to step(state: current, controls: controls)
+  end
+  return current
+end
+
+test "the snake moves one cell once its interval is up, and only one a frame"
+  let start be new_game(1)
+  let two be played(state: start, frames: keys.expanded(["W2"]))
+  check two.body is start.body
+  let three be played(state: start, frames: keys.expanded(["W3"]))
+  check three.body.first() is Cell(column: 11, row: 9)
+  check three.body.length() is 3
+  let slow be step(state: start, controls: keys.idle(1000))
+  check slow.body.first() is Cell(column: 11, row: 9)
+end
+
+test "a key turns the snake, but not straight back"
+  let start be new_game(1)
+  let up be played(state: start, frames: keys.expanded(["F3"]))
+  check up.body.first() is Cell(column: 10, row: 8)
+  check up.heading is Up
+  let back be played(state: start, frames: keys.expanded(["L3"]))
+  check back.body.first() is Cell(column: 11, row: 9)
+end
+
+test "the snake dies on the wall"
+  let state be played(state: new_game(1), frames: keys.expanded(["W200"]))
+  check state.status is Dead
+  check state.body.first() is Cell(column: 31, row: 9)
+end
+
+test "the snake dies on itself, but may follow its own tail"
+  let loop be [
+    Cell(column: 5, row: 5),
+    Cell(column: 6, row: 5),
+    Cell(column: 6, row: 6),
+    Cell(column: 5, row: 6)
+  ]
+  let ring be new_game(1) with body: loop, heading: Left, wanted: Left
+  let chasing be step(state: ring, controls: keys.idle(150) with backward: true)
+  check chasing.status is Playing
+  check chasing.body.first() is Cell(column: 5, row: 6)
+  let longer be ring with body: loop.append(Cell(column: 4, row: 6))
+  let bitten be step(state: longer, controls: keys.idle(150) with backward: true)
+  check bitten.status is Dead
+end
+
+test "eating grows the snake, scores, raises the best and draws food off the snake"
+  let start be new_game(1) with food: Cell(column: 11, row: 9)
+  let state be step(state: start, controls: keys.idle(150))
+  check state.score is 1
+  check length_of(state) is 4
+  check state.best is 4
+  check state.seed is not start.seed
+  check not state.body.contains(state.food)
+  check interval(state.score) is 145
+end
+
+test "the title waits for fire; after a death fire plays again, the best kept"
+  let waiting be title(1)
+  check step(state: waiting, controls: keys.idle(50)).status is Title
+  let started be step(state: waiting, controls: keys.idle(50) with fire: true)
+  check started.status is Playing
+  let dead be started with status: Dead, best: 9, trigger: false
+  check step(state: dead, controls: keys.holding(Up)).body is dead.body
+  let again be step(state: dead, controls: keys.idle(50) with fire: true)
+  check again.status is Playing
+  check again.best is 9
+  check length_of(again) is 3
+  check step(state: again, controls: keys.idle(50) with fire: true).status is Playing
+end
+
+test "quitting ends the game from any screen"
+  check step(state: new_game(1), controls: keys.controls_for("Q")).status is Quit
+  check step(state: title(1), controls: keys.controls_for("Q")).status is Quit
+end

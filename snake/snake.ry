@@ -1,0 +1,107 @@
+module snake
+  purpose: Play snake at the host's screen, or without one: scripted input and frames as text.
+
+import board exposing Direction
+import game exposing State, Status
+import keys
+import pilot
+import std.console
+import std.environment
+import std.screen
+import text_view
+import view
+
+let demo_frames: Integer be 600
+  purpose: The frames the demo lasts at most: thirty seconds of scripted time.
+
+public function seed_of(arguments: List of Text, place: Integer) returns Integer
+  purpose: The generator's seed from the argument at a place; 1 when it is missing or not a number.
+  example: seed_of(arguments: ["play", "7"], place: 1) is 7
+  example: seed_of(arguments: ["play"], place: 1) is 1
+  example: seed_of(arguments: ["play", "x"], place: 1) is 1
+
+  let word be arguments.at(place) otherwise return 1
+  return word.to_integer() otherwise 1
+end
+
+public function summary(state: State) returns Text
+  purpose: The line that sums up a game: the score, the snake's length, the frames played.
+  example: summary(game.new_game(1)) is "snake: score 0, length 3, frames 0"
+
+  return "snake: score {state.score}, length {game.length_of(state)}, frames {state.frames}"
+end
+
+function where_line(state: State) returns Text
+  purpose: The line that places a frame: its status, the head's cell and heading, the food's cell.
+
+  let head be state.body.first() otherwise state.food
+  let snake_at be "head {head.column},{head.row} heading {state.heading}"
+  return "{state.status}: {snake_at}, food {state.food.column},{state.food.row}"
+end
+
+function show(state: State) needs console
+  purpose: Print a frame as text, a character per cell, with the line that places it.
+
+  console.print(text_view.text_view(frame: view.render(state), columns: 32, rows: 20))
+  console.print("frame {state.frames}, {where_line(state)}")
+end
+
+function demo(seed: Integer) needs console
+  purpose: The pilot plays from the seed for the demo's frames or until it dies; every 10th shown.
+
+  let mutable state be game.new_game(seed)
+  repeat until state.frames is at least demo_frames or state.status is not Playing
+    change state to game.step(state: state, controls: pilot.pilot(state))
+    if state.frames remainder 10 is 0 then show(state) end
+  end
+  console.print(where_line(state))
+  console.print(summary(state))
+end
+
+function steps(script: List of Text) needs console
+  purpose: Play a script of moves from a new game of seed 1 and print where it ends.
+
+  let final be game.played(state: game.new_game(1), frames: keys.expanded(script))
+  show(final)
+  console.print(summary(final))
+end
+
+function play_live(seed: Integer) needs console, screen
+  purpose: Play at the host's screen from the title: each frame drawn, its input stepping the game.
+
+  let mutable state be game.title(seed)
+  repeat until state.status is Quit
+    let controls be screen.present(view.render(state))
+    let next be game.step(state: state, controls: controls)
+    if state.status is Playing and next.status is not Playing then console.print(summary(next)) end
+    change state to next
+  end
+end
+
+public function main() needs console, environment, screen
+  purpose: Run `play [seed]` at the screen, `demo [seed]`, `steps R5 F3 ...`, or show the title.
+
+  let arguments be environment.arguments()
+  let mode be arguments.at(0) otherwise "title"
+  match mode
+    when "play" then play_live(seed_of(arguments: arguments, place: 1))
+    when "demo" then demo(seed_of(arguments: arguments, place: 1))
+    when "steps" then steps(arguments.drop(1))
+    otherwise show(game.title(1))
+  end
+end
+
+test "the demo's pilot plays seed 1 to the end of the demo"
+  let mutable state be game.new_game(1)
+  repeat until state.frames is at least demo_frames or state.status is not Playing
+    change state to game.step(state: state, controls: pilot.pilot(state))
+  end
+  check state.frames is demo_frames
+  check state.status is Playing
+end
+
+test "a script of moves turns the snake: right, up, then left"
+  let final be game.played(state: game.new_game(1), frames: keys.expanded(["R5", "F3", "L3"]))
+  check final.heading is Left
+  check final.frames is 11
+end

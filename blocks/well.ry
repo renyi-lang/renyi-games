@@ -1,0 +1,106 @@
+module well
+  purpose: The well of 10 by 20 cells as a list of codes, row by row: what fits, locks and clears.
+
+import pieces exposing Cell
+
+public let well_columns: Integer be 10
+  purpose: The width of the well in cells.
+
+public let well_rows: Integer be 20
+  purpose: The depth of the well in cells.
+
+public type Clearing
+  purpose: A well after its full rows were taken out, and how many there were.
+  has board: List of Integer
+  has rows_cleared: Integer
+end
+
+public function empty() returns List of Integer
+  purpose: A well with every cell empty, code 0.
+  example: empty().length() is 200
+
+  return zeros(well_columns * well_rows)
+end
+
+function zeros(length: Integer) returns List of Integer
+  purpose: A list of the given length holding 0 in every place.
+
+  let mutable result: List of Integer be []
+  repeat until result.length() is at least length
+    change result to result.append(0)
+  end
+  return result
+end
+
+public function code_at(board: List of Integer, cell: Cell) returns Integer
+  purpose: The code at a cell: 0 empty, 1 to 7 a kind's, -1 outside the well (above it is open).
+  example: code_at(board: empty(), cell: Cell(column: 0, row: 0)) is 0
+  example: code_at(board: empty(), cell: Cell(column: 10, row: 0)) is -1
+  example: code_at(board: empty(), cell: Cell(column: 3, row: 20)) is -1
+
+  if cell.column is less than 0 or cell.column is at least well_columns then return -1 end
+  if cell.row is at least well_rows then return -1 end
+  if cell.row is less than 0 then return 0 end
+  return board.at(cell.row * well_columns + cell.column) otherwise -1
+end
+
+public function fits(board: List of Integer, cells: List of Cell) returns Boolean
+  purpose: Whether every cell lies inside the well's sides and floor on an empty cell.
+  example: fits(board: empty(), cells: [Cell(column: 9, row: 19)]) is true
+  example: fits(board: empty(), cells: [Cell(column: -1, row: 5)]) is false
+
+  return for each cell in cells all code_at(board: board, cell: cell) is 0
+end
+
+public function filled(board: List of Integer, cells: List of Cell, code: Integer)
+  returns List of Integer
+  purpose: The well with the cells set to the code; a cell outside the well is left out.
+  example: filled(board: empty(), cells: [Cell(column: 2, row: 0)], code: 5).at(2) is 5
+
+  let mutable result be board
+  for each cell in cells
+    if code_at(board: board, cell: cell) is -1 or cell.row is less than 0 then continue end
+    change result to result.with_at(index: cell.row * well_columns + cell.column, item: code)
+  end
+  return result
+end
+
+function row_of(board: List of Integer, row: Integer) returns List of Integer
+  purpose: The codes of one row of the well, left to right.
+
+  return board.slice(start: row * well_columns, stop: row * well_columns + well_columns)
+end
+
+public function is_full(board: List of Integer, row: Integer) returns Boolean
+  purpose: Whether every cell of a row holds a piece.
+  example: is_full(board: empty(), row: 19) is false
+
+  return for each code in row_of(board: board, row: row) all code is not 0
+end
+
+public function cleared(board: List of Integer) returns Clearing
+  purpose: The well with its full rows taken out and the rows above moved down, and their count.
+  example: cleared(empty()).rows_cleared is 0
+
+  let kept be
+    for each row from 0 to well_rows - 1
+    where not is_full(board: board, row: row)
+    collect row_of(board: board, row: row)
+  let gone be well_rows - kept.length()
+  let fresh be zeros(gone * well_columns)
+  return Clearing(board: fresh.append_all(kept.flattened()), rows_cleared: gone)
+end
+
+test "a full bottom row clears, and the row above it moves down"
+  let mutable board be empty()
+  for each column from 0 to 9
+    change board to filled(board: board, cells: [Cell(column: column, row: 19)], code: 1)
+  end
+  change board to filled(board: board, cells: [Cell(column: 4, row: 18)], code: 3)
+  check is_full(board: board, row: 19)
+  let clearing be cleared(board)
+  check clearing.rows_cleared is 1
+  check code_at(board: clearing.board, cell: Cell(column: 4, row: 19)) is 3
+  check code_at(board: clearing.board, cell: Cell(column: 0, row: 19)) is 0
+  check clearing.board.length() is 200
+end

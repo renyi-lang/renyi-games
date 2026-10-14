@@ -1,0 +1,118 @@
+module text_view
+  purpose: A frame of rectangles and labels sampled into a grid of characters, for tests.
+
+import pieces
+import std.screen exposing Colour, Shape
+
+let ramp: List of Text be [" ", ".", ":", "-", "=", "+", "*", "#", "%", "@"]
+  purpose: The characters from dark to bright that stand for a colour that is not a piece's.
+
+public let text_columns: Integer be 35
+  purpose: The columns of a text frame: one per 9 pixels, so a cell of the well is one character.
+
+public let text_rows: Integer be 22
+  purpose: The rows of a text frame: one per 9 pixels.
+
+public function glyph(colour: Colour) returns Text
+  purpose: A piece's letter for a piece's colour, else the character for the colour's brightness.
+  example: glyph(pieces.colour_of(pieces.kind_at(2))) is "T"
+  example: glyph(Colour(red: 0, green: 0, blue: 0)) is " "
+  example: glyph(Colour(red: 40, green: 40, blue: 40)) is "."
+  example: glyph(Colour(red: 190, green: 190, blue: 190)) is "#"
+
+  let kind be for each kind in pieces.all_kinds where pieces.colour_of(kind) is colour first
+  match kind
+    when some(found) then return pieces.letter_of(found)
+    when nothing then
+      let luma be (colour.red * 299 + colour.green * 587 + colour.blue * 114).quotient(1000)
+      return ramp.at((luma * ramp.length()).quotient(256)) otherwise "@"
+  end
+end
+
+public function cells_covering(start: Integer, stop: Integer, size: Integer, limit: Integer)
+  returns Range
+  purpose: The cells of the size whose sample point, the cell's middle, lies from start to stop.
+  example: cells_covering(start: 117, stop: 124, size: 9, limit: 35).to_list() is [13]
+  example: cells_covering(start: 0, stop: 199, size: 9, limit: 22).length() is 22
+  example: cells_covering(start: 5, stop: 6, size: 9, limit: 35).length() is 0
+
+  let middle be size.quotient(2)
+  let low be (start - middle + size - 1).at_least(0).quotient(size)
+  let high be (stop - middle).quotient(size).at_most(limit - 1)
+  if stop is less than middle then return from 1 to 0 end
+  return from low to high
+end
+
+public function text_view(frame: List of Shape) returns Text
+  purpose: The frame drawn into the grid of characters, each the sample of a 9 by 9 pixel cell.
+  example: text_view([]).length() is 35 * 22 + 21
+
+  let mutable grid be " ".repeat(text_columns * text_rows).characters()
+  for each shape in frame
+    match shape
+      when Rectangle(screen_x, screen_y, width, height, colour) then
+        let across be cells_covering(
+          start: screen_x,
+          stop: screen_x + width - 1,
+          size: 9,
+          limit: text_columns
+        )
+        let down be cells_covering(
+          start: screen_y,
+          stop: screen_y + height - 1,
+          size: 9,
+          limit: text_rows
+        )
+        change grid to painted(grid: grid, across: across, down: down, symbol: glyph(colour))
+      when Label(screen_x, screen_y, text) then
+        change grid to lettered(
+          grid: grid,
+          column: screen_x.quotient(9),
+          row: screen_y.quotient(9),
+          text: text
+        )
+      otherwise continue
+    end
+  end
+  let lines be
+    for each row from 0 to text_rows - 1
+    collect grid.slice_text(start: row * text_columns, stop: row * text_columns + text_columns)
+  return lines.join("\n")
+end
+
+function painted(grid: List of Text, across: Range, down: Range, symbol: Text) returns List of Text
+  purpose: The grid with every cell of the block of columns and rows set to the symbol.
+
+  let mutable result be grid
+  for each row in down
+    for each column in across
+      change result to result.with_at(index: row * text_columns + column, item: symbol)
+    end
+  end
+  return result
+end
+
+function lettered(grid: List of Text, column: Integer, row: Integer, text: Text)
+  returns List of Text
+  purpose: The grid with the text written from a cell to the right, clipped at the end of its row.
+
+  let mutable result be grid
+  if row is at least text_rows then return result end
+  for each letter, place in text.characters().with_index()
+    if column + place is at least text_columns then break end
+    change result to result.with_at(index: row * text_columns + column + place, item: letter)
+  end
+  return result
+end
+
+test "a rectangle lands in the cells its sample points fall in, a label over it"
+  let white be Colour(red: 255, green: 255, blue: 255)
+  let frame be [
+    Rectangle(screen_x: 9, screen_y: 9, width: 18, height: 9, colour: white),
+    Label(screen_x: 18, screen_y: 9, text: "HI", colour: white)
+  ]
+  let lines be text_view(frame).lines()
+  check lines.length() is 22
+  check lines.at(0) is " ".repeat(35)
+  check lines.at(1) is " @HI".pad_right(35)
+end

@@ -1,0 +1,171 @@
+module field
+  purpose: The minefield: its cells, the mines a seeded generator places, the flood of a reveal.
+
+public let columns: Integer be 16
+  purpose: The cells across the field.
+
+public let rows: Integer be 12
+  purpose: The cells down the field.
+
+public let mine_total: Integer be 20
+  purpose: The mines a field holds once they are placed.
+
+let cell_total: Integer be 192
+  purpose: The cells of the field, 16 by 12.
+
+public type Field
+  purpose: The mines, the revealed and the flagged cells, each a set of indices (row * 16 + column).
+  has mines: Set of Integer
+  has revealed: Set of Integer
+  has flags: Set of Integer
+end
+
+public type Placement
+  purpose: The mines a generator placed and its state after the last draw.
+  has mines: Set of Integer
+  has seed: Integer
+end
+
+public function empty_field() returns Field
+  purpose: A field with no mine placed yet, nothing revealed and nothing flagged.
+  example: empty_field().mines.is_empty() is true
+
+  let nothing_yet: Set of Integer be [].to_set()
+  return Field(mines: nothing_yet, revealed: nothing_yet, flags: nothing_yet)
+end
+
+public function next_seed(seed: Integer) returns Integer
+  purpose: The next state of the linear congruential generator (the constants of C's rand).
+  example: next_seed(1) is 1103527590
+  example: next_seed(0) is 12345
+
+  return (seed * 1103515245 + 12345) remainder 2147483648
+end
+
+public function place_mines(seed: Integer, spared: Integer) returns Placement
+  purpose: Twenty mines drawn from the generator in turn, never on the spared cell or twice on one.
+  example: place_mines(seed: 1, spared: 0).mines.length() is 20
+  example: place_mines(seed: 1, spared: 0).mines.contains(0) is false
+
+  let mutable mines: Set of Integer be [].to_set()
+  let mutable state be seed
+  repeat until mines.length() is at least mine_total
+    change state to next_seed(state)
+    let drawn be state.quotient(65536) remainder cell_total
+    if drawn is not spared then change mines to mines.add(drawn) end
+  end
+  return Placement(mines: mines, seed: state)
+end
+
+public function cell_at(column: Integer, row: Integer) returns Integer
+  purpose: The index of the cell at a column and a row.
+  example: cell_at(column: 3, row: 2) is 35
+
+  return row * columns + column
+end
+
+public function inside(column: Integer, row: Integer) returns Boolean
+  purpose: Whether a column and a row name a cell of the field.
+  example: inside(column: 15, row: 11) is true
+  example: inside(column: 16, row: 0) is false
+  example: inside(column: 0, row: 0 - 1) is false
+
+  return column is at least 0
+    and column is less than columns
+    and row is at least 0
+    and row is less than rows
+end
+
+public function neighbours(index: Integer) returns List of Integer
+  purpose: The indices of the up to eight cells around a cell, row by row.
+  example: neighbours(0) is [1, 16, 17]
+  example: neighbours(17).length() is 8
+  example: neighbours(191) is [174, 175, 190]
+
+  let column be index remainder columns
+  let row be index.quotient(columns)
+  let mutable result: List of Integer be []
+  for each down from row - 1 to row + 1
+    for each across from column - 1 to column + 1
+      let itself be across is column and down is row
+      if inside(column: across, row: down) and not itself then
+        change result to result.append(cell_at(column: across, row: down))
+      end
+    end
+  end
+  return result
+end
+
+public function adjacent(field: Field, index: Integer) returns Integer
+  purpose: How many mines lie around a cell.
+  example: adjacent(field: (empty_field() with mines: [1, 16, 40].to_set()), index: 0) is 2
+
+  return for each other in neighbours(index) where field.mines.contains(other) count
+end
+
+public function flooded(field: Field, start: Integer) returns Set of Integer
+  purpose: The revealed cells after revealing one: a cell with no mine around opens its neighbours.
+  example: flooded(field: (empty_field() with mines: [0].to_set()), start: 2).length() is 191
+
+  let mutable revealed be field.revealed.add(start)
+  let mutable work be [start]
+  repeat until work.is_empty()
+    let current be work.last() otherwise break
+    change work to work.without_last()
+    if adjacent(field: field, index: current) is 0 then
+      for each other in neighbours(current)
+        where not revealed.contains(other) and not field.flags.contains(other)
+        change revealed to revealed.add(other)
+        change work to work.append(other)
+      end
+    end
+  end
+  return revealed
+end
+
+public function flag_toggled(field: Field, index: Integer) returns Field
+  purpose: The field with a hidden cell's flag set or taken away; a revealed cell takes no flag.
+  example: flag_toggled(field: empty_field(), index: 5).flags.contains(5) is true
+
+  if field.revealed.contains(index) then return field end
+  if field.flags.contains(index) then return field with flags: field.flags.without(index) end
+  return field with flags: field.flags.add(index)
+end
+
+public function cleared(field: Field) returns Boolean
+  purpose: Whether the mines are placed and every safe cell is revealed.
+  example: cleared(empty_field()) is false
+
+  if field.mines.is_empty() then return false end
+  return field.revealed.length() is cell_total - field.mines.length()
+end
+
+test "no seed puts a mine on the spared cell"
+  for each seed from 1 to 3
+    for each spared from 0 to cell_total - 1
+      check not place_mines(seed: seed, spared: spared).mines.contains(spared)
+    end
+  end
+end
+
+test "the generator is deterministic and the seed changes the field"
+  check place_mines(seed: 1, spared: 0) is place_mines(seed: 1, spared: 0)
+  check place_mines(seed: 1, spared: 0).mines is not place_mines(seed: 2, spared: 0).mines
+end
+
+test "a flood stops at numbered cells and at flags, and never opens a mine"
+  let mines be [cell_at(column: 5, row: 0), cell_at(column: 5, row: 1)].to_set()
+  let board be empty_field() with mines: mines
+  let opened be flooded(field: board, start: 0)
+  check not opened.contains(cell_at(column: 5, row: 0))
+  check opened.contains(cell_at(column: 4, row: 0))
+  check opened.contains(cell_at(column: 15, row: 11))
+  check opened.length() is cell_total - 2
+  let flagged be board with flags: [cell_at(column: 1, row: 0)].to_set()
+  check not flooded(field: flagged, start: 0).contains(cell_at(column: 1, row: 0))
+end
+
+test "every safe cell revealed clears the field"
+  let board be empty_field() with mines: [0].to_set()
+  check cleared(board with revealed: flooded(field: board, start: 191))
+end

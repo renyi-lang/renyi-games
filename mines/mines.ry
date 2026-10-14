@@ -1,0 +1,145 @@
+module mines
+  purpose: Play Minesweeper at the host's screen, or without one: scripted input, frames as text.
+
+import field
+import game exposing State, Status
+import std.console
+import std.environment
+import std.screen exposing Input
+import text_view
+import view
+
+let frame_ms: Integer be 160
+  purpose: A scripted frame in milliseconds, past the repeat delay: a held arrow moves each frame.
+
+let demo_moves: List of Text be ["W10 S1 W9", "R2 S1 W17", "L3 S4 W12", "L2 W8 S1 W9"]
+  purpose: The demo in four legs: reveal a 2, flood a zero, flag a mine, step on another.
+
+function demo_script() returns List of Text
+  purpose: The demo's moves one by one, each a key and a frame count.
+
+  return demo_moves.join(" ").split(" ")
+end
+
+public function controls_for(key: Text) returns Input
+  purpose: The input of one scripted frame for a key; W, or an unknown key, waits.
+  example: controls_for("F").forward is true
+  example: controls_for("S").fire is true
+  example: controls_for("W").fire is false
+
+  let idle be game.idle(frame_ms)
+  match key
+    when "F" then return idle with forward: true
+    when "B" then return idle with backward: true
+    when "L" then return idle with turn_left: true
+    when "R" then return idle with turn_right: true
+    when "S" then return idle with fire: true
+    when "Q" then return idle with quit: true
+    otherwise return idle
+  end
+end
+
+public function expanded(script: List of Text) returns List of Input
+  purpose: One input per frame for moves such as R3 (right for three frames) or S, then a release.
+  example: expanded(["R2", "S"]).length() is 4
+  example: expanded(["L3"]).at(2) is controls_for("L")
+  example: expanded([]) is [controls_for("W")]
+
+  let mutable frames: List of Input be []
+  for each move in script
+    let times be move.drop(1).to_integer() otherwise 1
+    for each key in move.take(1).repeat(times).characters()
+      change frames to frames.append(controls_for(key))
+    end
+  end
+  return frames.append(controls_for("W"))
+end
+
+public function summary(state: State, frame_number: Integer) returns Text
+  purpose: One line on a game: the cells revealed, the flags, the status and the frames played.
+  example: summary(state: game.new_game(1), frame_number: 0)
+    is "mines: revealed 0, flags 0, playing, frames 0"
+
+  return "mines: {tally(state)}, frames {frame_number}"
+end
+
+public function tally(state: State) returns Text
+  purpose: The cells revealed, the flags and the status of a game, as the summary lines show them.
+  example: tally(game.new_game(1)) is "revealed 0, flags 0, playing"
+
+  let board be state.board
+  let status be state.status.to_text().to_lower()
+  return "revealed {board.revealed.length()}, flags {board.flags.length()}, {status}"
+end
+
+function show(state: State, frame_number: Integer) needs console
+  purpose: Print a frame as text with its summary line.
+
+  console.print(text_view.text_view(frame: view.render(state), columns: 80, rows: 50))
+  console.print(summary(state: state, frame_number: frame_number))
+end
+
+function play(script: List of Text, every: Integer, seed: Integer) needs console
+  purpose: Play a script from a new game, showing every n-th frame, then the last and its summary.
+
+  let mutable state be game.new_game(seed)
+  let mutable number be 0
+  for each controls in expanded(script)
+    if state.status is not Playing then break end
+    change state to game.step(state: state, controls: controls)
+    change number to number + 1
+    if every is greater than 0 and number remainder every is 0 then
+      show(state: state, frame_number: number)
+    end
+  end
+  if every is greater than 0 then
+    console.print(text_view.text_view(frame: view.render(state), columns: 80, rows: 50))
+  end
+  console.print(summary(state: state, frame_number: number))
+end
+
+function play_live(seed: Integer) needs console, screen
+  purpose: Play at the host's screen from the title, each frame drawn, its input stepping the game.
+
+  let mutable state be game.title(seed)
+  repeat until state.status is Quit
+    let controls be screen.present(view.render(state))
+    let next be game.step(state: state, controls: controls)
+    if state.status is Playing and next.status is not Playing then
+      console.print("mines: {tally(next)}, seconds {next.clock.quotient(1000)}")
+    end
+    change state to next
+  end
+end
+
+public function seed_of(argument: Text) returns Integer
+  purpose: The seed an argument names, its absolute value; 1 when it is not a whole number.
+  example: seed_of("42") is 42
+  example: seed_of("x") is 1
+
+  let seed be argument.to_integer() otherwise 1
+  return seed.absolute()
+end
+
+public function main() needs console, environment, screen
+  purpose: Run `play [seed]` at the screen, `demo`, `steps R3 B2 S1 ...`, or show the first frame.
+
+  let arguments be environment.arguments()
+  let mode be arguments.at(0) otherwise "start"
+  let seed be seed_of(arguments.at(1) otherwise "1")
+  match mode
+    when "play" then play_live(seed)
+    when "demo" then play(script: demo_script(), every: 10, seed: 1)
+    when "steps" then play(script: arguments.drop(1), every: 0, seed: 1)
+    otherwise show(state: game.new_game(1), frame_number: 0)
+  end
+end
+
+test "the demo reveals a 2, floods a zero, flags a mine and steps on another"
+  let final be game.played(state: game.new_game(1), frames: expanded(demo_script()))
+  check final.status is Lost
+  check final.board.revealed.length() is 152
+  check final.board.flags is [field.cell_at(column: 6, row: 5)].to_set()
+  check final.exploded is field.cell_at(column: 4, row: 5)
+  check final.clock is 71 * 160
+end

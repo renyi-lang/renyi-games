@@ -1,0 +1,267 @@
+module game
+  purpose: The state of a game and one frame of its rules, a pure function of state and input.
+
+import field exposing Field
+import std.screen exposing Input
+
+public type Status is one of
+  purpose: Where the game is: the title screen, play, how it ended, or quit.
+  Title
+  Playing
+  Won
+  Lost
+  Quit
+  can ToText
+end
+
+public type State
+  purpose: Everything a frame needs: the field, the generator, the cursor, the keys and the clock.
+  has board: Field
+  has seed: Integer
+  has status: Status
+  has cursor_column: Integer
+  has cursor_row: Integer
+  has previous: Input
+  has move_ms: Integer
+  has fire_ms: Integer
+  has fire_spent: Boolean
+  has clock: Integer
+  has exploded: maybe Integer
+end
+
+public let repeat_ms: Integer be 150
+  purpose: The milliseconds a held arrow key waits before the cursor moves again.
+
+public let long_press_ms: Integer be 400
+  purpose: The milliseconds fire must be held to flag a cell instead of revealing it.
+
+public function idle(elapsed_ms: Integer) returns Input
+  purpose: An input with no key held, lasting the given milliseconds.
+  example: idle(50).fire is false
+
+  return Input(
+    forward: false,
+    backward: false,
+    turn_left: false,
+    turn_right: false,
+    fire: false,
+    quit: false,
+    elapsed_ms: elapsed_ms
+  )
+end
+
+public function new_game(seed: Integer) returns State
+  purpose: A game in play on a field without mines yet, the cursor near the middle.
+  example: new_game(1).status is Playing
+  example: new_game(1).cursor_column is 7
+
+  return State(
+    board: field.empty_field(),
+    seed: seed,
+    status: Playing,
+    cursor_column: 7,
+    cursor_row: 5,
+    previous: idle(0),
+    move_ms: 0,
+    fire_ms: 0,
+    fire_spent: true,
+    clock: 0,
+    exploded: nothing
+  )
+end
+
+public function title(seed: Integer) returns State
+  purpose: The title screen in front of a new game with the seed.
+  example: title(1).status is Title
+
+  return new_game(seed) with status: Title
+end
+
+public function mines_left(state: State) returns Integer
+  purpose: The mines not yet flagged, as the counter shows them; below zero on too many flags.
+  example: mines_left(new_game(1)) is 20
+
+  return field.mine_total - state.board.flags.length()
+end
+
+public function step(state: State, controls: Input) returns State
+  purpose: One frame: quit ends anywhere, play goes on, the title or an ended game starts on fire.
+
+  let elapsed be controls.elapsed_ms.at_least(0)
+  let seen be state with previous: controls
+  if controls.quit then return seen with status: Quit end
+  match state.status
+    when Playing then
+      return playing(state: state, controls: controls, elapsed: elapsed) with previous: controls
+    when Quit then return seen
+    otherwise
+      if controls.fire and not state.previous.fire then
+        return new_game(state.seed) with previous: controls
+      end
+      return seen
+  end
+end
+
+function playing(state: State, controls: Input, elapsed: Integer) returns State
+  purpose: One frame of play: fire reveals or flags where it was held, the cursor moves, time runs.
+
+  let fired be fire_handled(state: state, controls: controls, elapsed: elapsed)
+  let moved be cursor_moved(state: fired, controls: controls, elapsed: elapsed)
+  return moved with clock: state.clock + elapsed
+end
+
+function axis(plus: Boolean, minus: Boolean) returns Integer
+  purpose: One step along an axis: 1 for the plus key alone, -1 for the minus key alone, else 0.
+
+  if plus and not minus then return 1 end
+  if minus and not plus then return 0 - 1 end
+  return 0
+end
+
+function newly_pressed(now: Input, before: Input) returns Boolean
+  purpose: Whether an arrow key is held now that was not held in the frame before.
+
+  let up be now.forward and not before.forward
+  let down be now.backward and not before.backward
+  let left be now.turn_left and not before.turn_left
+  return up or down or left or (now.turn_right and not before.turn_right)
+end
+
+function cursor_moved(state: State, controls: Input, elapsed: Integer) returns State
+  purpose: The cursor moved one cell on a press, and again every 150 ms the key stays held.
+
+  let across be axis(plus: controls.turn_right, minus: controls.turn_left)
+  let down be axis(plus: controls.backward, minus: controls.forward)
+  if across is 0 and down is 0 then return state with move_ms: 0 end
+  if newly_pressed(now: controls, before: state.previous) then
+    return shifted(state: state, across: across, down: down) with move_ms: 0
+  end
+  let held be state.move_ms + elapsed
+  if held is less than repeat_ms then return state with move_ms: held end
+  return shifted(state: state, across: across, down: down) with move_ms: held - repeat_ms
+end
+
+function shifted(state: State, across: Integer, down: Integer) returns State
+  purpose: The cursor moved by a step, kept on the field.
+
+  let column be (state.cursor_column + across).at_least(0).at_most(field.columns - 1)
+  let row be (state.cursor_row + down).at_least(0).at_most(field.rows - 1)
+  return state with cursor_column: column, cursor_row: row
+end
+
+function fire_handled(state: State, controls: Input, elapsed: Integer) returns State
+  purpose: Fire released before 400 ms reveals the cursor's cell; held to 400 ms it flags at once.
+
+  if controls.fire and not state.previous.fire then
+    return state with fire_ms: 0, fire_spent: false
+  end
+  if controls.fire then
+    let held be state.fire_ms + elapsed
+    if held is less than long_press_ms or state.fire_spent then return state with fire_ms: held end
+    let index be field.cell_at(column: state.cursor_column, row: state.cursor_row)
+    let board be field.flag_toggled(field: state.board, index: index)
+    return state with board: board, fire_ms: held, fire_spent: true
+  end
+  if state.previous.fire and not state.fire_spent then
+    return revealed(state) with fire_spent: true
+  end
+  return state
+end
+
+function armed(state: State, spared: Integer) returns State
+  purpose: The mines placed from the seed at the first reveal, sparing the revealed cell.
+
+  if not state.board.mines.is_empty() then return state end
+  let placement be field.place_mines(seed: state.seed, spared: spared)
+  return state with board: (state.board with mines: placement.mines), seed: placement.seed
+end
+
+function revealed(state: State) returns State
+  purpose: The cursor's cell revealed: a mine loses, a safe cell opens (a zero floods), all wins.
+
+  let index be field.cell_at(column: state.cursor_column, row: state.cursor_row)
+  if state.board.flags.contains(index) or state.board.revealed.contains(index) then return state end
+  let placed be armed(state: state, spared: index)
+  if placed.board.mines.contains(index) then return placed with status: Lost, exploded: index end
+  let opened be placed.board with revealed: field.flooded(field: placed.board, start: index)
+  if field.cleared(opened) then return placed with board: opened, status: Won end
+  return placed with board: opened
+end
+
+public function played(state: State, frames: List of Input) returns State
+  purpose: The state after every frame of input in turn; a finished game stays as it is.
+
+  let mutable current be state
+  for each controls in frames
+    if current.status is not Playing then break end
+    change current to step(state: current, controls: controls)
+  end
+  return current
+end
+
+function pressed(times: Integer, fire: Boolean) returns List of Input
+  purpose: Frames of 100 ms with fire held or not, for the tests.
+
+  let mutable frames: List of Input be []
+  repeat until frames.length() is at least times
+    change frames to frames.append(idle(100) with fire: fire)
+  end
+  return frames
+end
+
+test "a short press reveals on release, never a mine first, and floods a zero"
+  let start be new_game(1)
+  let held be played(state: start, frames: pressed(times: 2, fire: true))
+  check held.board.revealed.is_empty()
+  let after be played(state: held, frames: [idle(100)])
+  let index be field.cell_at(column: 7, row: 5)
+  check after.status is Playing
+  check after.board.revealed.contains(index)
+  check not after.board.mines.contains(index)
+  check after.board.mines.length() is 20
+  check after.clock is 300
+end
+
+test "a long press flags at 400 ms and its release reveals nothing; again unflags"
+  let long be pressed(times: 5, fire: true).append(idle(100))
+  let flagged be played(state: new_game(1), frames: long)
+  check flagged.board.flags.contains(field.cell_at(column: 7, row: 5))
+  check flagged.board.revealed.is_empty()
+  check mines_left(flagged) is 19
+  check played(state: flagged, frames: long).board.flags.is_empty()
+end
+
+test "the cursor moves a cell per press, repeats while held, and stays on the field"
+  let left be idle(100) with turn_left: true
+  let twice be played(state: new_game(1), frames: [left, idle(100), left])
+  check twice.cursor_column is 5
+  let held be played(state: new_game(1), frames: [left, left, left, left])
+  check held.cursor_column is 4
+  let far be played(state: new_game(1), frames: pressed(times: 40, fire: false).append(left))
+  check far.cursor_column is 6
+  let up be idle(200) with forward: true
+  let top be played(state: new_game(1), frames: [up, up, up, up, up, up, up, up])
+  check top.cursor_row is 0
+end
+
+test "revealing a mine loses and records it; revealing every safe cell wins"
+  let board be field.empty_field() with mines: [87].to_set()
+  let mined be new_game(1) with board: board
+  let tap be [(idle(100) with fire: true), idle(100)]
+  let lost be played(state: mined, frames: tap)
+  check lost.status is Lost
+  check lost.exploded is 87
+  let safe be mined with cursor_column: 0, cursor_row: 0
+  check played(state: safe, frames: tap).status is Won
+end
+
+test "the title and an ended game start on a fresh fire, whose release reveals nothing"
+  let waiting be title(1)
+  check step(state: waiting, controls: idle(50)).status is Title
+  let started be step(state: waiting, controls: idle(50) with fire: true)
+  check started.status is Playing
+  check step(state: started, controls: idle(50)).board.revealed.is_empty()
+  let ended be new_game(1) with status: Lost
+  check step(state: ended, controls: idle(50) with fire: true).status is Playing
+  check step(state: ended, controls: idle(50) with quit: true).status is Quit
+end

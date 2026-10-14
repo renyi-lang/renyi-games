@@ -1,0 +1,95 @@
+module levels
+  purpose: The five puzzles of the game as text rows, each with a solution that plays it through.
+
+public type Puzzle
+  purpose: One level: its rows of symbols (# . $ * @ + and space) and a solution as a move string.
+  has rows: List of Text
+  has solution: Text
+end
+
+public let puzzles: List of Puzzle be [
+  Puzzle(
+    rows: [
+      "########",  # three crates, 6 moves
+      "#  .   #",
+      "#  $   #",
+      "#. $@$.#",
+      "#      #",
+      "########"
+    ],
+    solution: "RlLLrU"
+  ),
+  Puzzle(
+    rows: [
+      "  #######",  # two crates, 32 moves
+      "###  .  #",
+      "#   #$# #",
+      "# $   @ #",
+      "#  ##.  #",
+      "####  ###",
+      "   ####"
+    ],
+    solution: "lUdllulldRRuurRllddRluurrdDrruuL"
+  ),
+  Puzzle(
+    rows: [
+      " ########",  # three crates, 68 moves
+      " #  .   #",
+      "##$##   #",
+      "#   . #$#",
+      "# @ $   #",
+      "#  ### .#",
+      "########"
+    ],
+    solution: "urrrdLLullddrUluRRdrruuulllDurrrdrrDDlllluRdllluRdrrrUdllluRdrruUruL"
+  ),
+  Puzzle(
+    rows: [
+      "##########",  # four crates, 80 moves
+      "#    #   #",
+      "# $$ # $ #",
+      "#  #   # #",
+      "#  #.. # #",
+      "## #.. # #",
+      "#  $     #",
+      "#   @  ###",
+      "########"
+    ],
+    solution: "lluRdrUrrrruuuuLulDDDDuuurrddddlLdlUUruulluullDDuRldDDuuuurrDDrrddddllllluRRRdrU"
+  ),
+  Puzzle(
+    rows: [
+      " ##########",  # four crates, 145 moves
+      " #   #    #",
+      " # $   $  #",
+      "## ##.### #",
+      "#   ..  # #",
+      "# $ #.  $ #",
+      "#   ####  #",
+      "#  @      #",
+      "###########"
+    ],
+    solution: [
+      "uuurruulLrrddllddlUluRRRRdrruLdlUlldddrrrrruruLLLrrruuulLLLLullDDuurrdLr",
+      "rrrrrdddllulllldlluRRRldddrrrrruuruuulllllullDDurrrrrrrdddddlllllluulluRR"
+    ].join("")
+  )
+]
+  purpose: The levels in order of difficulty; a solution's letters are u d l r, upper case a push.
+
+public function puzzle(index: Integer) returns Puzzle
+  purpose: The puzzle at an index counted from 0; an index past either end gives the first.
+  example: puzzle(0).solution is "RlLLrU"
+  example: puzzle(99).solution is "RlLLrU"
+
+  let fallback be Puzzle(rows: ["###", "#@#", "###"], solution: "")
+  let opening be puzzles.at(0) otherwise fallback
+  return puzzles.at(index) otherwise opening
+end
+
+public function total() returns Integer
+  purpose: How many puzzles the game has.
+  example: total() is 5
+
+  return puzzles.length()
+end

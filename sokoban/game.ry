@@ -1,0 +1,584 @@
+module game
+  purpose: The state of a game of Sokoban and one frame of it, a pure function of state and input.
+
+import levels exposing Puzzle
+import std.screen exposing Input
+
+public type Status is one of
+  purpose: Where the game is: the title, play, a level just solved, every level solved, or quit.
+  Title
+  Playing
+  Solved
+  Finished
+  Quit
+  can ToText
+end
+
+public type Direction is one of
+  purpose: The four ways the player steps.
+  Up
+  Down
+  Left
+  Right
+  can ToText
+end
+
+public type Board
+  purpose: The fixed part of a level: its size in cells, its walls and targets, the floor inside.
+  has width: Integer
+  has height: Integer
+  has walls: Set of Integer
+  has targets: Set of Integer
+  has inside: Set of Integer
+end
+
+public type Position
+  purpose: The moving part of a level: the player's cell, the crates' cells, the moves and pushes.
+  has player: Integer
+  has crates: Set of Integer
+  has moves: Integer
+  has pushes: Integer
+end
+
+public type Keys
+  purpose: Which of the game's keys are held in one frame.
+  has up: Boolean
+  has down: Boolean
+  has left: Boolean
+  has right: Boolean
+  has fire: Boolean
+end
+
+public type State
+  purpose: Everything a frame needs: the level and its position, the undo history, the key timers.
+  has status: Status
+  has level: Integer
+  has board: Board
+  has now: Position
+  has history: List of Position
+  has keys: Keys
+  has held_ms: Integer
+  has fire_ms: Integer
+  has pause_ms: Integer
+  has total_moves: Integer
+end
+
+let repeat_time: Integer be 200
+  purpose: The milliseconds a direction key is held before the player steps again.
+
+let restart_time: Integer be 1000
+  purpose: The milliseconds fire is held to restart the level.
+
+let pause_time: Integer be 1000
+  purpose: The milliseconds a solved level stays on screen before the next one.
+
+let no_keys: Keys be Keys(up: false, down: false, left: false, right: false, fire: false)
+  purpose: The keys of a frame with nothing held.
+
+public function cell_index(board: Board, column: Integer, row: Integer) returns Integer
+  purpose: The index of a cell in the board's row-major order.
+  example: cell_index(board: blank_board(width: 5, height: 3), column: 2, row: 1) is 7
+
+  return row * board.width + column
+end
+
+function blank_board(width: Integer, height: Integer) returns Board
+  purpose: A board of the size with no walls, targets or floor, to be filled in.
+  example: blank_board(width: 4, height: 2).walls.length() is 0
+
+  let none: List of Integer be []
+  return Board(
+    width: width,
+    height: height,
+    walls: none.to_set(),
+    targets: none.to_set(),
+    inside: none.to_set()
+  )
+end
+
+public function neighbour(board: Board, cell: Integer, direction: Direction) returns maybe Integer
+  purpose: The cell next to a cell in a direction; nothing past the board's edge.
+  example: neighbour(board: blank_board(width: 5, height: 3), cell: 7, direction: Up) is 2
+  example: neighbour(board: blank_board(width: 5, height: 3), cell: 5, direction: Left) is nothing
+  example: neighbour(board: blank_board(width: 5, height: 3), cell: 12, direction: Down) is nothing
+
+  let column be cell remainder board.width
+  let row be cell.quotient(board.width)
+  match direction
+    when Up then
+      if row is 0 then return nothing end
+      return cell - board.width
+    when Down then
+      if row + 1 is at least board.height then return nothing end
+      return cell + board.width
+    when Left then
+      if column is 0 then return nothing end
+      return cell - 1
+    when Right then
+      if column + 1 is at least board.width then return nothing end
+      return cell + 1
+  end
+end
+
+let directions: List of Direction be [Up, Down, Left, Right]
+  purpose: The four directions, in the order a held key is chosen.
+
+public type Layout
+  purpose: A parsed level: its board and the position it starts from.
+  has board: Board
+  has start: Position
+end
+
+public function layout_of(rows: List of Text) returns Layout
+  purpose: The board and the starting position the rows draw; short rows are padded with floor.
+  example: layout_of(["#####", "#@$.#", "#####"]).start.player is 6
+  example: layout_of(["#####", "#@$.#", "#####"]).start.crates.sorted() is [7]
+  example: layout_of(["#####", "#@$.#", "#####"]).board.targets.sorted() is [8]
+  example: layout_of(["#####", "#@$.#", "#####"]).board.inside.sorted() is [6, 7, 8]
+  example: layout_of(["####", "#+*#", "####"]).board.targets.sorted() is [5, 6]
+
+  let widths be for each line in rows collect line.length()
+  let width be widths.largest() otherwise 0
+  let blank be blank_board(width: width, height: rows.length())
+  let walls be cells_with(rows: rows, width: width, symbols: "#").to_set()
+  let targets be cells_with(rows: rows, width: width, symbols: ".*+").to_set()
+  let crates be cells_with(rows: rows, width: width, symbols: "$*").to_set()
+  let player be cells_with(rows: rows, width: width, symbols: "@+").first() otherwise 0
+  let walled be blank with walls: walls, targets: targets
+  let board be walled with inside: interior(board: walled, start: player)
+  return Layout(board: board, start: Position(player: player, crates: crates, moves: 0, pushes: 0))
+end
+
+function cells_with(rows: List of Text, width: Integer, symbols: Text) returns List of Integer
+  purpose: The indices of the cells whose symbol is one of the given symbols.
+  example: cells_with(rows: ["#@", "$#"], width: 2, symbols: "#") is [0, 3]
+  example: cells_with(rows: ["#", "$#"], width: 2, symbols: " ") is [1]
+
+  let mutable found: List of Integer be []
+  for each line, row in rows.with_index()
+    for each symbol, column in line.pad_right(width).characters().with_index()
+      if symbols.contains(symbol) then change found to found.append(row * width + column) end
+    end
+  end
+  return found
+end
+
+function interior(board: Board, start: Integer) returns Set of Integer
+  purpose: The cells the player could reach were there no crates: the floor inside the walls.
+  example: interior(board: layout_of(["#####", "#@ ##", "#####"]).board, start: 6).sorted()
+    is [6, 7]
+
+  let mutable seen be [start].to_set()
+  let mutable frontier be [start]
+  repeat until frontier.is_empty()
+    let cell be frontier.last() otherwise break
+    change frontier to frontier.without_last()
+    for each direction in directions
+      let next be neighbour(board: board, cell: cell, direction: direction) otherwise continue
+      if board.walls.contains(next) or seen.contains(next) then continue end
+      change seen to seen.add(next)
+      change frontier to frontier.append(next)
+    end
+  end
+  return seen
+end
+
+public function moved(board: Board, now: Position, direction: Direction) returns maybe Position
+  purpose: The position after one step; nothing when a wall or a crate that cannot move is ahead.
+  example: moved(board: tiny.board, now: tiny.start, direction: Up) is nothing
+  example: moved(board: tiny.board, now: tiny.start, direction: Left) is nothing
+
+  let target be neighbour(
+    board: board,
+    cell: now.player,
+    direction: direction
+  ) otherwise return nothing
+  if board.walls.contains(target) then return nothing end
+  if not now.crates.contains(target) then return now with player: target, moves: now.moves + 1 end
+  let beyond be neighbour(board: board, cell: target, direction: direction) otherwise return nothing
+  if board.walls.contains(beyond) or now.crates.contains(beyond) then return nothing end
+  let crates be now.crates.without(target).add(beyond)
+  return now with player: target, crates: crates, moves: now.moves + 1, pushes: now.pushes + 1
+end
+
+let tiny: Layout be layout_of(["#######", "#@$ . #", "#   $.#", "#######"])
+  purpose: A small level for the examples: a crate east of the player, one south-east, two targets.
+
+public function is_solved(board: Board, now: Position) returns Boolean
+  purpose: Whether every crate stands on a target.
+  example: is_solved(board: tiny.board, now: tiny.start) is false
+  example: is_solved(board: tiny.board, now: replayed(layout: tiny, solution: "rrdr")) is true
+
+  return now.crates.is_subset_of(board.targets)
+end
+
+public function direction_of(letter: Text) returns maybe Direction
+  purpose: The direction of a letter of a solution, u d l r in either case; nothing for another.
+  example: direction_of("U") is Up
+  example: direction_of("r") is Right
+  example: direction_of("x") is nothing
+
+  match letter.to_lower()
+    when "u" then return Up
+    when "d" then return Down
+    when "l" then return Left
+    when "r" then return Right
+    otherwise return nothing
+  end
+end
+
+public function replayed(layout: Layout, solution: Text) returns Position
+  purpose: The position after every letter of a move string in turn; a blocked step stays put.
+  example: replayed(layout: tiny, solution: "rrdR").pushes is 3
+  example: replayed(layout: tiny, solution: "rrrr").moves is 3
+
+  let mutable now be layout.start
+  for each letter in solution.characters()
+    let direction be direction_of(letter) otherwise continue
+    change now to moved(board: layout.board, now: now, direction: direction) otherwise now
+  end
+  return now
+end
+
+public let frame_ms: Integer be 50
+  purpose: The milliseconds one scripted frame lasts: twenty frames a second.
+
+public function pressed(key: Text, elapsed_ms: Integer) returns Input
+  purpose: The input of a frame holding one key, F B L R S Q (up, down, left, right, fire, quit).
+  example: pressed(key: "F", elapsed_ms: 50).forward is true
+  example: pressed(key: "S", elapsed_ms: 50).fire is true
+  example: pressed(key: "W", elapsed_ms: 50).fire is false
+
+  let idle be Input(
+    forward: false,
+    backward: false,
+    turn_left: false,
+    turn_right: false,
+    fire: false,
+    quit: false,
+    elapsed_ms: elapsed_ms
+  )
+  match key
+    when "F" then return idle with forward: true
+    when "B" then return idle with backward: true
+    when "L" then return idle with turn_left: true
+    when "R" then return idle with turn_right: true
+    when "S" then return idle with fire: true
+    when "Q" then return idle with quit: true
+    otherwise return idle
+  end
+end
+
+public function key_of(letter: Text) returns Text
+  purpose: The key letter that steps the way a solution's letter goes; W (wait) for any other.
+  example: key_of("u") is "F"
+  example: key_of("D") is "B"
+  example: key_of("?") is "W"
+
+  let direction be direction_of(letter) otherwise return "W"
+  match direction
+    when Up then return "F"
+    when Down then return "B"
+    when Left then return "L"
+    when Right then return "R"
+  end
+end
+
+public function taps(solution: Text) returns List of Input
+  purpose: The frames that play a move string: each step a key pressed for a frame, then released.
+  example: taps("uL").length() is 4
+  example: taps("uL").at(2) is pressed(key: "L", elapsed_ms: frame_ms)
+
+  let mutable frames: List of Input be []
+  for each letter in solution.characters()
+    let press be pressed(key: key_of(letter), elapsed_ms: frame_ms)
+    change frames to frames.append(press).append(pressed(key: "W", elapsed_ms: frame_ms))
+  end
+  return frames
+end
+
+public function level_start(level: Integer, total_moves: Integer) returns State
+  purpose: The level counted from 0 in play at its start, carrying the moves of the levels before.
+  example: level_start(level: 0, total_moves: 0).now.player is 28
+  example: level_start(level: 1, total_moves: 6).total_moves is 6
+
+  let layout be layout_of(levels.puzzle(level).rows)
+  return State(
+    status: Playing,
+    level: level,
+    board: layout.board,
+    now: layout.start,
+    history: [],
+    keys: no_keys,
+    held_ms: 0,
+    fire_ms: 0,
+    pause_ms: 0,
+    total_moves: total_moves
+  )
+end
+
+public function new_game() returns State
+  purpose: A game in play at the start of the first level.
+  example: new_game().level is 0
+
+  return level_start(level: 0, total_moves: 0)
+end
+
+public function title() returns State
+  purpose: The title screen in front of a new game.
+  example: title().status is Title
+
+  return new_game() with status: Title
+end
+
+function keys_of(controls: Input) returns Keys
+  purpose: The game's keys held in a frame's input.
+  example: keys_of(pressed(key: "L", elapsed_ms: 50)).left is true
+
+  return Keys(
+    up: controls.forward,
+    down: controls.backward,
+    left: controls.turn_left,
+    right: controls.turn_right,
+    fire: controls.fire
+  )
+end
+
+function chosen(keys: Keys) returns maybe Direction
+  purpose: The direction of the keys held, up first, then down, left and right; nothing for none.
+  example: chosen(no_keys with left: true, right: true) is Left
+  example: chosen(no_keys) is nothing
+
+  return for each direction in directions where is_held(keys: keys, direction: direction) first
+end
+
+function is_held(keys: Keys, direction: Direction) returns Boolean
+  purpose: Whether the key of a direction is held.
+  example: is_held(keys: (no_keys with down: true), direction: Down) is true
+
+  match direction
+    when Up then return keys.up
+    when Down then return keys.down
+    when Left then return keys.left
+    when Right then return keys.right
+  end
+end
+
+public function step(state: State, controls: Input) returns State
+  purpose: One frame: the title and the end wait for fire, play goes on, a solved level pauses.
+
+  let keys be keys_of(controls)
+  let elapsed be controls.elapsed_ms.at_least(0).at_most(100)
+  if controls.quit then return state with status: Quit, keys: keys end
+  match state.status
+    when Playing then return playing(state: state, keys: keys, elapsed: elapsed) with keys: keys
+    when Solved then return paused(state: state, elapsed: elapsed) with keys: keys
+    when Quit then return state with keys: keys
+    otherwise
+      if keys.fire and not state.keys.fire then return new_game() with keys: keys end
+      return state with keys: keys
+  end
+end
+
+function playing(state: State, keys: Keys, elapsed: Integer) returns State
+  purpose: One frame of play: fire undoes or restarts, a direction steps once and again when held.
+
+  if keys.fire then return fired(state: state, elapsed: elapsed) end
+  let ready be state with fire_ms: 0
+  let direction be chosen(keys) otherwise return ready with held_ms: 0
+  let fresh be not is_held(keys: state.keys, direction: direction)
+  let since be if fresh then 0 otherwise state.held_ms + elapsed end
+  if not fresh and since is less than repeat_time then return ready with held_ms: since end
+  return walked(state: (ready with held_ms: 0), direction: direction)
+end
+
+function fired(state: State, elapsed: Integer) returns State
+  purpose: Fire's frame: a fresh press undoes the last move, a hold of a second restarts the level.
+
+  if not state.keys.fire then return undone(state) with fire_ms: 0, held_ms: 0 end
+  let firing be state.fire_ms + elapsed
+  if firing is at least restart_time and state.fire_ms is less than restart_time then
+    return level_start(level: state.level, total_moves: state.total_moves) with fire_ms: firing
+  end
+  return state with fire_ms: firing
+end
+
+function undone(state: State) returns State
+  purpose: The state one move back; the start of a level stays as it is.
+
+  let last be state.history.last() otherwise return state
+  return state with now: last, history: state.history.without_last()
+end
+
+function walked(state: State, direction: Direction) returns State
+  purpose: The player's step in a direction, kept in the history; the last crate home solves it.
+
+  let after be moved(
+    board: state.board,
+    now: state.now,
+    direction: direction
+  ) otherwise return state
+  let stepped be state with now: after, history: state.history.append(state.now)
+  if not is_solved(board: state.board, now: after) then return stepped end
+  return stepped with status: Solved, pause_ms: 0, total_moves: state.total_moves + after.moves
+end
+
+function paused(state: State, elapsed: Integer) returns State
+  purpose: A solved level's frame: after a pause the next level starts, or the game is finished.
+
+  let waited be state.pause_ms + elapsed
+  if waited is less than pause_time then return state with pause_ms: waited end
+  if state.level + 1 is at least levels.total() then return state with status: Finished end
+  return level_start(level: state.level + 1, total_moves: state.total_moves)
+end
+
+public function played(state: State, frames: List of Input) returns State
+  purpose: The state after every frame of input in turn; a quit game stays as it is.
+
+  let mutable current be state
+  for each frame in frames
+    if current.status is Quit then break end
+    change current to step(state: current, controls: frame)
+  end
+  return current
+end
+
+public function waits(frames: Integer) returns List of Input
+  purpose: The given number of scripted frames with no key held.
+  example: waits(3).length() is 3
+  example: waits(0) is []
+
+  let mutable made: List of Input be []
+  repeat until made.length() is at least frames
+    change made to made.append(pressed(key: "W", elapsed_ms: frame_ms))
+  end
+  return made
+end
+
+public function held(key: Text, frames: Integer) returns List of Input
+  purpose: The given number of scripted frames holding one key.
+  example: held(key: "S", frames: 2).at(1) is pressed(key: "S", elapsed_ms: frame_ms)
+
+  let mutable made: List of Input be []
+  repeat until made.length() is at least frames
+    change made to made.append(pressed(key: key, elapsed_ms: frame_ms))
+  end
+  return made
+end
+
+function solution_holds(index: Integer) returns Boolean
+  purpose: Whether a level's solution solves it from an unsolved start, every step legal.
+  example: solution_holds(0) is true
+
+  let puzzle be levels.puzzle(index)
+  let layout be layout_of(puzzle.rows)
+  let final be replayed(layout: layout, solution: puzzle.solution)
+  let pushes be
+    for each letter in puzzle.solution.characters()
+    where letter is letter.to_upper()
+    count
+  let unsolved be not is_solved(board: layout.board, now: layout.start)
+  let counted be final.moves is puzzle.solution.length() and final.pushes is pushes
+  return unsolved and counted and is_solved(board: layout.board, now: final)
+end
+
+test "level 1's solution solves it"
+  check solution_holds(0) is true
+end
+
+test "level 2's solution solves it"
+  check solution_holds(1) is true
+end
+
+test "level 3's solution solves it"
+  check solution_holds(2) is true
+end
+
+test "level 4's solution solves it"
+  check solution_holds(3) is true
+end
+
+test "level 5's solution solves it"
+  check solution_holds(4) is true
+end
+
+test "every level fits in 16 by 12 cells and has as many targets as crates"
+  for each puzzle in levels.puzzles
+    let layout be layout_of(puzzle.rows)
+    check layout.board.width is at most 16
+    check layout.board.height is at most 12
+    check layout.board.targets.length() is layout.start.crates.length()
+  end
+end
+
+test "the first solution tapped frame by frame solves level 1; level 2 follows a pause"
+  let solved be played(state: new_game(), frames: taps(levels.puzzle(0).solution))
+  check solved.status is Solved
+  check solved.now.moves is 6
+  check solved.now.pushes is 4
+  check played(state: solved, frames: waits(18)).status is Solved
+  let next be played(state: solved, frames: waits(19))
+  check next.status is Playing
+  check next.level is 1
+  check next.total_moves is 6
+  check next.now.moves is 0
+end
+
+test "fire undoes the last move, and at the start undoes nothing"
+  let start be new_game()
+  let pushed be played(state: start, frames: taps("r"))
+  check pushed.now.pushes is 1
+  let undone_once be played(state: pushed, frames: held(key: "S", frames: 1))
+  check undone_once.now is start.now
+  check undone_once.history is []
+  check played(state: undone_once, frames: held(key: "S", frames: 1)).now is start.now
+end
+
+test "fire held for a second restarts the level, once"
+  let walked_twice be played(state: new_game(), frames: taps("ld"))
+  check walked_twice.now.moves is 2
+  check played(state: walked_twice, frames: held(key: "S", frames: 20)).now.moves is 1
+  let restarted be played(state: walked_twice, frames: held(key: "S", frames: 21))
+  check restarted.now is new_game().now
+  check restarted.history is []
+  check played(state: restarted, frames: held(key: "S", frames: 30)).now is new_game().now
+end
+
+test "a held direction steps once, then again after 200 milliseconds"
+  check played(state: new_game(), frames: held(key: "L", frames: 4)).now.moves is 1
+  check played(state: new_game(), frames: held(key: "L", frames: 5)).now.moves is 2
+  check played(state: new_game(), frames: held(key: "L", frames: 9)).now.pushes is 2
+end
+
+test "a step into a wall, or a crate against a crate or a wall, is not taken"
+  let layout be layout_of(["######", "#@$$.#", "#  . #", "######"])
+  check moved(board: layout.board, now: layout.start, direction: Right) is nothing
+  check moved(board: layout.board, now: layout.start, direction: Up) is nothing
+  let below be layout.start with player: 14
+  check moved(board: layout.board, now: below, direction: Up) is nothing
+end
+
+test "the title and the end wait for a fresh press of fire, then play starts at level 1"
+  check step(state: title(), controls: pressed(key: "F", elapsed_ms: 50)).status is Title
+  let started be step(state: title(), controls: pressed(key: "S", elapsed_ms: 50))
+  check started.status is Playing
+  check started.level is 0
+  let ended be level_start(level: 4, total_moves: 0) with status: Finished
+  let holding be ended with keys: (no_keys with fire: true)
+  check step(state: holding, controls: pressed(key: "S", elapsed_ms: 50)).status is Finished
+  check step(state: ended, controls: pressed(key: "S", elapsed_ms: 50)).level is 0
+end
+
+test "the last level solved finishes the game"
+  let last be level_start(level: 4, total_moves: 100)
+  let solved be played(state: last, frames: taps(levels.puzzle(4).solution))
+  check solved.status is Solved
+  let finished be played(state: solved, frames: waits(20))
+  check finished.status is Finished
+  check finished.total_moves is 245
+end
+
+test "quit ends the game from play and from the title"
+  check step(state: new_game(), controls: pressed(key: "Q", elapsed_ms: 50)).status is Quit
+  check step(state: title(), controls: pressed(key: "Q", elapsed_ms: 50)).status is Quit
+end

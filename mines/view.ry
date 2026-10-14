@@ -1,0 +1,211 @@
+module view
+  purpose: The frame of a state as shapes on the 320 by 200 screen: the title, or the field.
+
+import field
+import game exposing State, Status
+import std.screen exposing Colour, Shape
+
+public let cell_size: Integer be 12
+  purpose: The pixels a cell takes across and down, its gap of three pixels included.
+
+public let origin_x: Integer be 64
+  purpose: The column of the field's left edge, which centres its 192 pixels.
+
+public let origin_y: Integer be 24
+  purpose: The row of the field's top edge, under the counters.
+
+let digit_colours: List of Colour be [
+  Colour(red: 80, green: 140, blue: 255),
+  Colour(red: 60, green: 200, blue: 90),
+  Colour(red: 255, green: 90, blue: 80),
+  Colour(red: 180, green: 110, blue: 255),
+  Colour(red: 255, green: 160, blue: 40),
+  Colour(red: 60, green: 210, blue: 210),
+  Colour(red: 240, green: 240, blue: 240),
+  Colour(red: 170, green: 170, blue: 170)
+]
+  purpose: The colour of each count from 1 to 8.
+
+let ink: Colour be Colour(red: 230, green: 230, blue: 230)
+  purpose: The colour of the counters and the messages.
+
+function rgb(red: Integer, green: Integer, blue: Integer) returns Colour
+  purpose: A colour from its three channels.
+
+  return Colour(red: red, green: green, blue: blue)
+end
+
+public function render(state: State) returns List of Shape
+  purpose: The frame of a state: the title screen, or the field with the counters and a message.
+  example: render(game.title(1)).length() is 5
+  example: render(game.new_game(1)).length() is 196
+
+  let backdrop be Rectangle(
+    screen_x: 0,
+    screen_y: 0,
+    width: 320,
+    height: 200,
+    colour: rgb(red: 16, green: 16, blue: 24)
+  )
+  if state.status is Title then return [backdrop].append_all(title_labels()) end
+  let cells be for each index from 0 to 191 collect cell_shapes(state: state, index: index)
+  return [backdrop].append_all(header(state)).append_all(cells.flattened()).append(footer(state))
+end
+
+function title_labels() returns List of Shape
+  purpose: The title screen's lines: the name, how to start, the keys.
+
+  return [
+    Label(
+      screen_x: 128,
+      screen_y: 60,
+      text: "MINESWEEPER",
+      colour: rgb(red: 255, green: 220, blue: 90)
+    ),
+    Label(screen_x: 112, screen_y: 100, text: "PRESS FIRE TO START", colour: ink),
+    Label(screen_x: 60, screen_y: 132, text: "W A S D MOVE   F REVEAL   HOLD F FLAG", colour: ink),
+    Label(screen_x: 140, screen_y: 148, text: "Q QUIT", colour: ink)
+  ]
+end
+
+function header(state: State) returns List of Shape
+  purpose: The counters above the field: the mines not flagged and the seconds played.
+
+  let seconds be state.clock.quotient(1000)
+  return [
+    Label(screen_x: 64, screen_y: 8, text: "MINES {game.mines_left(state)}", colour: ink),
+    Label(screen_x: 200, screen_y: 8, text: "TIME {seconds}", colour: ink)
+  ]
+end
+
+function footer(state: State) returns Shape
+  purpose: The line under the field: how to play, or how the game ended.
+
+  let text be
+    match state.status
+      when Won then "CLEARED! FIRE FOR A NEW GAME"
+      when Lost then "BOOM! FIRE FOR A NEW GAME"
+      otherwise "F REVEAL   HOLD F FLAG   Q QUIT"
+    end
+  return Label(screen_x: 64, screen_y: 180, text: text, colour: ink)
+end
+
+public function cell_colour(state: State, index: Integer) returns Colour
+  purpose: A cell's ground: the cursor bright, the exploded mine red, revealed dark, hidden grey.
+  example: cell_colour(state: game.new_game(1), index: 87) is Colour(red: 255, green: 220, blue: 90)
+  example: cell_colour(state: game.new_game(1), index: 0) is Colour(red: 150, green: 150, blue: 160)
+
+  let cursor be field.cell_at(column: state.cursor_column, row: state.cursor_row)
+  if index is cursor then return rgb(red: 255, green: 220, blue: 90) end
+  if state.exploded is index then return rgb(red: 220, green: 30, blue: 30) end
+  if shown(state: state, index: index) then return rgb(red: 44, green: 44, blue: 52) end
+  return rgb(red: 150, green: 150, blue: 160)
+end
+
+function shown(state: State, index: Integer) returns Boolean
+  purpose: Whether a cell is open: revealed, or an unflagged mine once the game is lost.
+
+  let board be state.board
+  let lost_mine be state.status is Lost and board.mines.contains(index)
+  return board.revealed.contains(index) or (lost_mine and not board.flags.contains(index))
+end
+
+function cell_shapes(state: State, index: Integer) returns List of Shape
+  purpose: A cell's ground and its mark: a mine, a count, a flag, or nothing.
+
+  let left be origin_x + (index remainder field.columns) * cell_size
+  let top be origin_y + index.quotient(field.columns) * cell_size
+  let ground be Rectangle(
+    screen_x: left + 1,
+    screen_y: top + 1,
+    width: cell_size - 3,
+    height: cell_size - 3,
+    colour: cell_colour(state: state, index: index)
+  )
+  let mark be cell_mark(state: state, index: index) otherwise return [ground]
+  return [ground, moved_to(shape: mark, left: left, top: top)]
+end
+
+function cell_mark(state: State, index: Integer) returns maybe Shape
+  purpose: The mark inside a cell, placed at the cell's top left corner; nothing on an empty one.
+
+  let board be state.board
+  if not shown(state: state, index: index) then
+    if board.flags.contains(index) then
+      return Rectangle(
+        screen_x: 3,
+        screen_y: 2,
+        width: 4,
+        height: 6,
+        colour: rgb(red: 255, green: 60, blue: 60)
+      )
+    end
+    return nothing
+  end
+  if board.mines.contains(index) then
+    return Label(screen_x: 3, screen_y: 2, text: "*", colour: rgb(red: 250, green: 250, blue: 250))
+  end
+  let count_around be field.adjacent(field: board, index: index)
+  if count_around is 0 then return nothing end
+  let colour be digit_colours.at(count_around - 1) otherwise ink
+  return Label(screen_x: 3, screen_y: 2, text: "{count_around}", colour: colour)
+end
+
+function moved_to(shape: Shape, left: Integer, top: Integer) returns Shape
+  purpose: A rectangle or a label of a cell moved from the cell's corner to the screen.
+
+  match shape
+    when Rectangle(screen_x, screen_y, width, height, colour) then
+      return Rectangle(
+        screen_x: left + screen_x,
+        screen_y: top + screen_y,
+        width: width,
+        height: height,
+        colour: colour
+      )
+    when Label(screen_x, screen_y, text, colour) then
+      return Label(screen_x: left + screen_x, screen_y: top + screen_y, text: text, colour: colour)
+    otherwise return shape
+  end
+end
+
+test "a count, a flag and the lost field's mines are drawn in their cells, flags kept"
+  let board be field.empty_field()
+    with mines: [0, 2].to_set(), revealed: [1].to_set(), flags: [16].to_set()
+  let state be game.new_game(1) with board: board
+  let frame be render(state)
+  check frame.contains(
+    Label(screen_x: 79, screen_y: 26, text: "2", colour: Colour(red: 60, green: 200, blue: 90))
+  )
+  check frame.contains(
+    Rectangle(
+      screen_x: 67,
+      screen_y: 38,
+      width: 4,
+      height: 6,
+      colour: Colour(red: 255, green: 60, blue: 60)
+    )
+  )
+  check not frame.contains(
+    Label(screen_x: 67, screen_y: 26, text: "*", colour: Colour(red: 250, green: 250, blue: 250))
+  )
+  let flagged_mine be board with flags: [2].to_set()
+  let lost be render(state with status: Lost, exploded: 0)
+  let kept be render(state with board: flagged_mine, status: Lost, exploded: 0)
+  check kept.contains(
+    Rectangle(
+      screen_x: 91,
+      screen_y: 26,
+      width: 4,
+      height: 6,
+      colour: Colour(red: 255, green: 60, blue: 60)
+    )
+  )
+  check not kept.contains(
+    Label(screen_x: 91, screen_y: 26, text: "*", colour: Colour(red: 250, green: 250, blue: 250))
+  )
+  check lost.contains(
+    Label(screen_x: 67, screen_y: 26, text: "*", colour: Colour(red: 250, green: 250, blue: 250))
+  )
+  check lost.contains(Label(screen_x: 64, screen_y: 8, text: "MINES 19", colour: ink))
+end

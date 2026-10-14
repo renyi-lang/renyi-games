@@ -1,0 +1,70 @@
+module keys
+  purpose: Inputs of scripted frames: an idle frame, a direction's key, a script of moves expanded.
+
+import board exposing Direction
+import std.screen exposing Input
+
+public let frame_ms: Integer be 50
+  purpose: The milliseconds one scripted frame lasts: twenty frames a second.
+
+public function idle(elapsed_ms: Integer) returns Input
+  purpose: An input with no key held, lasting the given milliseconds.
+  example: idle(50).forward is false
+  example: idle(50).elapsed_ms is 50
+
+  return Input(
+    forward: false,
+    backward: false,
+    turn_left: false,
+    turn_right: false,
+    fire: false,
+    quit: false,
+    elapsed_ms: elapsed_ms
+  )
+end
+
+public function holding(heading: Direction) returns Input
+  purpose: One scripted frame with the key of a direction held: forward is up, backward down.
+  example: holding(Up).forward is true
+  example: holding(Left).turn_left is true
+
+  let still be idle(frame_ms)
+  match heading
+    when Up then return still with forward: true
+    when Down then return still with backward: true
+    when Left then return still with turn_left: true
+    when Right then return still with turn_right: true
+  end
+end
+
+public function controls_for(key: Text) returns Input
+  purpose: The input of one scripted frame for a letter of the script; W or an unknown letter waits.
+  example: controls_for("F").forward is true
+  example: controls_for("S").fire is true
+  example: controls_for("W") is idle(frame_ms)
+
+  match key
+    when "F" then return holding(Up)
+    when "B" then return holding(Down)
+    when "L" then return holding(Left)
+    when "R" then return holding(Right)
+    when "S" then return idle(frame_ms) with fire: true
+    when "Q" then return idle(frame_ms) with quit: true
+    otherwise return idle(frame_ms)
+  end
+end
+
+public function expanded(script: List of Text) returns List of Input
+  purpose: One input per frame for a script of moves such as R5 (right for five frames) or S.
+  example: expanded(["R2", "S"]).length() is 3
+  example: expanded(["L3"]).at(2) is controls_for("L")
+
+  let mutable frames: List of Input be []
+  for each move in script
+    let times be move.drop(1).to_integer() otherwise 1
+    for each key in move.take(1).repeat(times).characters()
+      change frames to frames.append(controls_for(key))
+    end
+  end
+  return frames
+end

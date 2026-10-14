@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Renyi games</title>
+<meta name="description" content="Four small games written in Renyi, compiled and run in the browser by the Renyi toolchain built for WebAssembly.">
+<style>
+/* The main site's palette (tools/site.py, LIGHT and DARK), the few
+   tokens this page uses, in light and dark. */
+:root {
+  --bg: #ffffff; --surface: #f4f5f8; --surface-strong: #eceef2;
+  --line: #e4e6eb; --line-strong: #d0d4db;
+  --text: #111318; --text-2: #50565f; --text-3: #656b75;
+  --accent: #2f4fd8; --accent-strong: #2440b8; --on-accent: #ffffff;
+  --danger: #c4321c;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0a0b0e; --surface: #13151a; --surface-strong: #1a1d24;
+    --line: #23262e; --line-strong: #323640;
+    --text: #ecedf0; --text-2: #a3a9b3; --text-3: #868d98;
+    --accent: #8ea2ff; --accent-strong: #aebcff; --on-accent: #0a0b0e;
+    --danger: #ff8f80;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.55 var(--sans);
+}
+main { max-width: 720px; margin: 0 auto; padding: 32px 16px 48px; }
+h1 { margin: 0 0 6px; font-size: 2rem; letter-spacing: -0.02em; }
+p { margin: 0 0 12px; }
+.lead { color: var(--text-2); }
+a { color: var(--accent); }
+a:hover { color: var(--accent-strong); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 16px 0; }
+button {
+  font: inherit; font-size: .95rem; cursor: pointer;
+  padding: 6px 14px; border-radius: 8px;
+  border: 1px solid var(--line-strong); background: var(--surface); color: var(--text);
+}
+button:hover:not(:disabled) { background: var(--surface-strong); }
+button:disabled { cursor: default; opacity: .6; }
+button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+button.primary:hover:not(:disabled) { background: var(--accent-strong); }
+/* The canvas keeps its 640 by 400 pixels and is scaled down to the
+   width of the column; its pixels stay square. */
+canvas {
+  display: block; width: 100%; height: auto; aspect-ratio: 320 / 200;
+  background: #000; border-radius: 6px; outline: none;
+  image-rendering: pixelated; image-rendering: crisp-edges;
+}
+canvas:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.status { margin: 0; color: var(--text-2); font-size: .95rem; min-height: 1.5em; }
+.rate { margin: 0; color: var(--text-3); font: .85rem var(--mono); min-height: 1.4em; }
+.keys { color: var(--text-2); font-size: .95rem; margin-top: 16px; }
+kbd {
+  font: .85em var(--mono); padding: 1px 5px; border-radius: 4px;
+  border: 1px solid var(--line-strong); background: var(--surface);
+}
+</style>
+</head>
+<body>
+<main>
+<h1>Renyi games</h1>
+<p class="lead">Four small games written in <a href="https://renyi-lang.org">Renyi</a>, compiled and run in your browser by the Renyi toolchain built for WebAssembly. Nothing leaves the page. The sources are at <a href="https://github.com/renyi-lang/renyi-games">github.com/renyi-lang/renyi-games</a>.</p>
+
+<div class="row" role="group" aria-label="Games">
+<button type="button" data-game="snake" aria-pressed="true">Snake</button>
+<button type="button" data-game="blocks" aria-pressed="false">Blocks</button>
+<button type="button" data-game="sokoban" aria-pressed="false">Sokoban</button>
+<button type="button" data-game="mines" aria-pressed="false">Mines</button>
+</div>
+
+<canvas id="screen" width="640" height="400" tabindex="0" aria-label="The game's screen, 320 by 200 logical pixels">The games need a browser with a canvas and WebAssembly.</canvas>
+
+<div class="row">
+<button type="button" class="primary" id="start" disabled>Loading the toolchain…</button>
+<p class="status" id="status" aria-live="polite"></p>
+</div>
+<p class="rate" id="rate"></p>
+
+<div class="keys">
+<p>The arrows or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> move and turn; <kbd>Space</kbd> or <kbd>F</kbd> fires, which starts a game from its title screen; <kbd>Escape</kbd> or <kbd>Q</kbd> quits. Each game's README says what the keys do in it.</p>
+</div>
+<noscript><p class="status">The games need JavaScript and WebAssembly.</p></noscript>
+</main>
+<script src="games.js" defer></script>
+</body>
+</html>
